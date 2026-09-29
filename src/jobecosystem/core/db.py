@@ -143,6 +143,12 @@ def migrate(conn: sqlite3.Connection) -> list[int]:
 
 def schema_version(conn: sqlite3.Connection) -> int:
     """Highest applied migration version, or 0 if the database is uninitialized."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+        " AND name = 'schema_migrations'"
+    ).fetchone()
+    if exists is None:
+        return 0
     row = conn.execute(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations"
     ).fetchone()
