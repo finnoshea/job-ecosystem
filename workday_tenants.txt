@@ -5,18 +5,59 @@
 #
 #   host  tenant  site  [Display Name]
 #
-# Where the pieces come from, using a URL like
+# WHERE THE PARTS COME FROM
+#
+# Start from a company's careers URL in a browser, e.g.
+#
 #   https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/...
+#           A       B                        C
 #
-#   host     nvidia.wd5              {subdomain}.{wdN}.myworkdayjobs.com
-#   tenant   nvidia                  the /wday/cxs/{tenant}/ path segment
-#   site     NVIDIAExternalCareerSite   the first path segment
+#   host   = A + B   ->  nvidia.wd5
+#                         {company subdomain}.{workday shard}.myworkdayjobs.com
+#                         The shard (wd1, wd3, wd5, wd12, ...) is assigned by
+#                         Workday and cannot be guessed -- read it off the URL.
+#   site   = C       ->  NVIDIAExternalCareerSite
+#                         The first path segment. Case does not matter to the
+#                         API (verified across several tenants), but copy it as
+#                         shown so the file stays readable.
 #
-# The host alone is not enough: a bare host returns HTTP 406, and the site name
-# is not derivable from the company. To find a tenant's sites, read
+#   tenant           ->  nvidia
+#                         NOT visible in the careers URL. It appears only in the
+#                         API endpoint, which the browser does not show:
+#
+#   https://nvidia.wd5.myworkdayjobs.com/wday/cxs/nvidia/NVIDIAExternalCareerSite/jobs
+#                                                 ^^^^^^ tenant
+#
+# In practice the tenant is almost always the same as the company subdomain
+# (A above), so GUESS IT AND TRY IT. A wrong tenant fails immediately and
+# loudly -- an error object or HTTP 400/404, never a silent empty list -- so
+# trial is quicker than looking anything up:
+#
+#   curl -sX POST "https://{host}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs" \
+#     -H 'Content-Type: application/json' \
+#     -d '{"appliedFacets":{},"limit":20,"offset":0,"searchText":""}' | head -c 200
+#
+# If only the tenant is uncertain, this differs from the subdomain in rare
+# cases. Fallbacks if the guess fails:
+#
+#   * DevTools -> Network, filter for 'cxs', then interact with the page
+#     (search, paginate, open a job). The log shows the RESOLVED url that went
+#     over the wire. Do not look at the page source or the request-builder code:
+#     it is usually built from a variable (e.g. `/wday/cxs/${tenant}/...`), which
+#     tells you nothing. You need a request that was actually sent, so reload
+#     with the Network tab already open if nothing appears.
+#   * The site's sitemap, referenced from robots.txt, lists job URLs that
+#     include the /wday/cxs/ path.
+#
+# FINDING THE SITE NAMES
+#
+# A host on its own returns HTTP 406, and site names are not derivable from the
+# company. Read
+#
 #   https://{host}.myworkdayjobs.com/robots.txt
-# which lists every site in its Sitemap lines, or copy the segment straight out
-# of the company's careers URL. Sites are case-sensitive.
+#
+# which lists every site the tenant exposes in its Sitemap lines. Or copy the
+# segment straight out of the careers URL.
 #
 # A tenant may expose several sites -- Salesforce has nine -- and each needs its
 # own line. Sites with zero openings are harmless but noisy; delete lines you do
@@ -30,8 +71,15 @@
 # Disney 609.
 
 
-nvidia.wd5       nvidia      NVIDIAExternalCareerSite    Nvidia
-disney.wd5       disney      disneycareer                Disney
+nvidia.wd5       	nvidia      	NVIDIAExternalCareerSite   	Nvidia
+disney.wd5       	disney      	disneycareer                	Disney
+zillow.wd5	 	zillow      	Zillow_Group_External	 	Zillow
+generalmotors.wd5  	generalmotors  	Careers_GM			GeneralMotors
+rand.wd5  		rand  		External_Career_Site		RandCorp
+pwc.wd3  		pwc  		Global_Experienced_Careers	PriceWaterhouseCooper
+sonyglobal.wd1  	sonyglobal  	SonyGlobalCareers		Sony
+warnerbros.wd5  	warnerbros  	global				WarnerBros
+walmart.wd504  		walmart  	WalmartExternal			Walmart
 
 
 # ASMLEXT1 is ASML's largest site (641 openings vs 191 on ASMLPrivate1), but
