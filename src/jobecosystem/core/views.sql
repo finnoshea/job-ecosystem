@@ -17,6 +17,10 @@ DROP VIEW IF EXISTS jobs_unseen;
 DROP VIEW IF EXISTS jobs_reposted;
 DROP VIEW IF EXISTS jobs_stale;
 DROP VIEW IF EXISTS jobs_with_embeddings;
+DROP VIEW IF EXISTS jobs_needing_descriptions;
+DROP VIEW IF EXISTS run_stats;
+DROP VIEW IF EXISTS run_errors_by_source;
+DROP VIEW IF EXISTS description_progress;
 
 -- ---------------------------------------------------------------------------
 -- scrape_anchor: single row holding the freshest last_seen_at. A view with no
@@ -49,7 +53,9 @@ ORDER BY j.last_seen_at DESC, j.id DESC;
 
 -- ---------------------------------------------------------------------------
 -- jobs_reposted: repeat-posting signal -- rows seen more than once, or whose
--- content appears under more than one row.
+-- content appears under more than one row. Rows with a NULL content_hash are
+-- excluded: the hash cannot be computed until the description is fetched, and
+-- comparing titles alone would report every same-titled opening as a repost.
 -- ---------------------------------------------------------------------------
 CREATE VIEW jobs_reposted AS
 SELECT j.*,
@@ -57,12 +63,15 @@ SELECT j.*,
           FROM jobs k
          WHERE k.content_hash = j.content_hash) AS duplicate_content_count
 FROM jobs j
-WHERE j.repost_count > 0
-   OR EXISTS (
-        SELECT 1
-          FROM jobs k
-         WHERE k.content_hash = j.content_hash
-           AND k.id <> j.id
+WHERE j.content_hash IS NOT NULL
+  AND (
+        j.repost_count > 0
+     OR EXISTS (
+          SELECT 1
+            FROM jobs k
+           WHERE k.content_hash = j.content_hash
+             AND k.id <> j.id
+        )
       )
 ORDER BY j.repost_count DESC, j.last_seen_at DESC;
 
@@ -112,3 +121,94 @@ SELECT j.id           AS job_id,
        e.updated_at   AS embedded_at
 FROM jobs j
 JOIN job_embeddings e ON e.job_id = j.id;
+
+-- ---------------------------------------------------------------------------
+-- jobs_needing_descriptions: work queue for the paced description fetch.
+-- A NULL content_hash means the row was stored from a listing only, so its
+-- description has not been fetched yet. Newest first, and applied/seen rows are
+-- deprioritized last so triage decisions accelerate the useful work.
+-- ---------------------------------------------------------------------------
+CREATE VIEW jobs_needing_descriptions AS
+SELECT j.*
+FROM jobs j
+WHERE j.content_hash IS NULL
+  AND j.status <> 'hidden'
+ORDER BY j.status = 'new' DESC, j.first_seen_at DESC;
+
+-- ---------------------------------------------------------------------------
+-- run_stats: one row per scrape run, with the things you would otherwise
+-- compute by hand. Intended to be queried from outside this codebase -- the
+-- database is the durable record of what happened, and this view is its
+-- reporting surface.
+--
+--   status: 'running' while finished_at is NULL. A crashed run also looks like
+--           this, so treat a "running" row with a large minutes_since_start as
+--           a crash rather than progress.
+-- ---------------------------------------------------------------------------
+CREATE VIEW run_stats AS
+SELECT r.id,
+       r.source,
+       r.started_at,
+       r.finished_at,
+       CASE
+         WHEN r.finished_at IS NULL THEN 'running'
+         ELSE 'finished'
+       END AS status,
+       CASE
+         WHEN r.finished_at IS NULL THEN NULL
+         ELSE ROUND(
+           (julianday(r.finished_at) - julianday(r.started_at)) * 86400.0,
+           1
+         )
+       END AS duration_seconds,
+       -- Always populated, including for an in-flight run: that is the row where
+       -- "how long has this been going" is the whole question.
+       ROUND(
+         (julianday('now') - julianday(r.started_at)) * 1440.0,
+         1
+       ) AS minutes_since_start,
+       r.fetched,
+       r.inserted,
+       r.updated,
+       r.errors,
+       CASE
+         WHEN r.fetched > 0 THEN ROUND(100.0 * r.inserted / r.fetched, 1)
+         ELSE NULL
+       END AS inserted_percent
+FROM scrape_runs r;
+
+-- ---------------------------------------------------------------------------
+-- run_errors_by_source: error totals rolled up per source, for spotting a
+-- tenant that is consistently broken rather than transiently unlucky.
+-- ---------------------------------------------------------------------------
+CREATE VIEW run_errors_by_source AS
+SELECT source,
+       COUNT(*)                                   AS runs,
+       SUM(errors)                                AS error_count,
+       SUM(CASE WHEN errors > 0 THEN 1 ELSE 0 END) AS runs_with_errors,
+       MAX(started_at)                             AS last_run_at
+FROM scrape_runs
+GROUP BY source;
+
+-- ---------------------------------------------------------------------------
+-- description_progress: how much of the description backlog is done.
+--
+-- Descriptions are fetched one paced request per job, so a full pass takes a
+-- while; this is the view to poll while it runs. "pending" counts only rows
+-- eligible for the queue (SQL view jobs_needing_descriptions), so it is the
+-- number that will actually be worked on.
+-- ---------------------------------------------------------------------------
+CREATE VIEW description_progress AS
+SELECT COUNT(*)                                            AS total_jobs,
+       SUM(CASE WHEN content_hash IS NOT NULL THEN 1 ELSE 0 END)
+                                                           AS described,
+       SUM(CASE WHEN content_hash IS NULL THEN 1 ELSE 0 END)
+                                                           AS pending,
+       ROUND(
+         100.0 * SUM(CASE WHEN content_hash IS NOT NULL THEN 1 ELSE 0 END)
+         / MAX(COUNT(*), 1),
+         1
+       )                                                   AS described_percent,
+       MIN(description_fetched_at)                         AS first_fetched_at,
+       MAX(description_fetched_at)                         AS last_fetched_at
+FROM jobs;

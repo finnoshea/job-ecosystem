@@ -35,8 +35,11 @@ JOB_COLUMNS: tuple[str, ...] = (
     "posted_at",
     "first_seen_at",
     "last_seen_at",
+    "description_fetched_at",
+    "description_url",
     "repost_count",
     "status",
+    "rating",
     "content_hash",
     "raw_json",
 )
@@ -88,15 +91,25 @@ class Job:
     posted_at: str | None = None
     first_seen_at: str | None = None
     last_seen_at: str | None = None
+    description_fetched_at: str | None = None
+    description_url: str | None = None
     repost_count: int = 0
     status: JobStatus = "new"
-    content_hash: str = ""
+    rating: int | None = None
+    content_hash: str | None = None
     raw_json: str | None = None
     id: int | None = None
 
     def __post_init__(self) -> None:
-        """Fill in ``content_hash`` when the caller did not supply one."""
-        if not self.content_hash:
+        """Fill in ``content_hash`` when a description is available.
+
+        Left ``None`` when there is no description: hashing title and company
+        alone would collide across distinct openings that share a title, making
+        SQL view ``jobs_reposted`` report false positives. ``content_hash`` is
+        therefore a completeness marker as well as a fingerprint -- NULL means
+        "description not fetched yet".
+        """
+        if self.content_hash is None and self.description is not None:
             self.content_hash = content_hash(self.title, self.company, self.description)
 
     @classmethod
@@ -114,6 +127,11 @@ class Job:
         if data["id"] is None:
             data.pop("id")
         return data
+
+    @property
+    def has_description(self) -> bool:
+        """True when the full posting text has been fetched."""
+        return self.description is not None and self.content_hash is not None
 
     @property
     def salary_range(self) -> str:

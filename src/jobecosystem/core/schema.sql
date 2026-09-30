@@ -19,18 +19,22 @@ CREATE TABLE IF NOT EXISTS jobs (
     company       TEXT    NOT NULL,
     title         TEXT    NOT NULL,
     location      TEXT,
-    description   TEXT,                              -- normalized text: embedding + keyword input
+    description   TEXT,                              -- plain text: embedding + keyword input
     url           TEXT,
     salary_min    INTEGER,                           -- annual USD
     salary_max    INTEGER,                           -- annual USD; absent when only a floor is given
     posted_at     TEXT,                              -- from the board; often absent or wrong
     first_seen_at TEXT    NOT NULL,                  -- when *we* first scraped it
     last_seen_at  TEXT    NOT NULL,                  -- bumped every scrape -> ghost detection
+    description_fetched_at TEXT,                     -- when the description was fetched; NULL = only the listing is stored
+    description_url TEXT,                             -- where to fetch the full text, for sources that need a second request
     repost_count  INTEGER NOT NULL DEFAULT 0
                   CHECK (repost_count >= 0),         -- bumped on reappearance / reappearance after a gap
     status        TEXT    NOT NULL DEFAULT 'new'     -- triage state, never set by scrapers
                   CHECK (status IN ('new', 'seen', 'applied', 'hidden')),
-    content_hash  TEXT    NOT NULL,                  -- hash(title+company+description): cross-source repost net
+    rating        INTEGER                            -- triage judgment, 0-5; NULL = unrated
+                  CHECK (rating IS NULL OR (rating >= 0 AND rating <= 5)),
+    content_hash  TEXT,                              -- hash(title+company+description); NULL until the description arrives
     raw_json      TEXT,                              -- original vendor payload, for debugging parsers
     UNIQUE (source, external_id)                     -- upsert target: dedup key
 );
@@ -38,10 +42,14 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs (content_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_company      ON jobs (company);
 CREATE INDEX IF NOT EXISTS idx_jobs_status       ON jobs (status);
+CREATE INDEX IF NOT EXISTS idx_jobs_rating       ON jobs (rating);
 CREATE INDEX IF NOT EXISTS idx_jobs_last_seen_at ON jobs (last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_posted_at    ON jobs (posted_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_salary_min   ON jobs (salary_min);
-
+-- Partial: rows without a description are excluded, so the "needs fetching"
+-- sweep stays cheap as the table grows.
+CREATE INDEX IF NOT EXISTS idx_jobs_needs_description
+    ON jobs (id) WHERE content_hash IS NULL;
 -- ---------------------------------------------------------------------------
 -- job_embeddings: one row per embedded job. Vectors live here rather than on
 -- jobs so a job row stays cheap to read and can exist before it is embedded.

@@ -1,1 +1,22 @@
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Local data, never committed
+*.db
+*.db-wal
+*.db-shm
+jobs.db*
+
+# Embedding model cache (large, re-downloadable)
+embedders/
+
+# Local configuration
+.env
