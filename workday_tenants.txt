@@ -1,0 +1,53 @@
+# Workday tenants to scrape, one site per line.
+#
+# Workday's public job API is per-tenant AND per-site, so unlike Ashby a single
+# company name is not enough. Each line needs three parts:
+#
+#   host  tenant  site  [Display Name]
+#
+# Where the pieces come from, using a URL like
+#   https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/...
+#
+#   host     nvidia.wd5              {subdomain}.{wdN}.myworkdayjobs.com
+#   tenant   nvidia                  the /wday/cxs/{tenant}/ path segment
+#   site     NVIDIAExternalCareerSite   the first path segment
+#
+# The host alone is not enough: a bare host returns HTTP 406, and the site name
+# is not derivable from the company. To find a tenant's sites, read
+#   https://{host}.myworkdayjobs.com/robots.txt
+# which lists every site in its Sitemap lines, or copy the segment straight out
+# of the company's careers URL. Sites are case-sensitive.
+#
+# A tenant may expose several sites -- Salesforce has nine -- and each needs its
+# own line. Sites with zero openings are harmless but noisy; delete lines you do
+# not care about. Some tenants list sites in robots.txt that they exclude from
+# crawling; those are commented out below rather than enabled.
+#
+# Blank lines are ignored. A line starting with '#' is a comment. That a site
+# exists does not mean it is large: Futureforce_Internships has 16 openings.
+#
+# Current sizes, for reference: Nvidia 2000, Salesforce 1524, ASMLPrivate1 191,
+# Disney 609.
+
+
+nvidia.wd5       nvidia      NVIDIAExternalCareerSite    Nvidia
+disney.wd5       disney      disneycareer                Disney
+
+
+# ASMLEXT1 is ASML's largest site (641 openings vs 191 on ASMLPrivate1), but
+# robots.txt asks crawlers not to touch it:
+#   Disallow: /ASMLEXT1/
+# while ASMLPrivate1 is allowed. Left disabled on purpose; see the file header.
+# asml.wd3       asml        ASMLEXT1                    ASML (external)
+asml.wd3         asml        ASMLPrivate1                ASML
+
+
+# Salesforce:
+salesforce.wd12  salesforce  External_Career_Site        Salesforce
+# Salesforce's other public sites, mostly small or empty. Uncomment to include:
+# salesforce.wd12  salesforce  Futureforce_NewGradRoles    Salesforce (New Grad)
+# salesforce.wd12  salesforce  Futureforce_Internships     Salesforce (Internships)
+# salesforce.wd12  salesforce  Mulesoft_Careersite         MuleSoft
+# salesforce.wd12  salesforce  Slack                       Slack
+# salesforce.wd12  salesforce  Tableau                     Tableau
+# salesforce.wd12  salesforce  Salesforce_Research         Salesforce Research

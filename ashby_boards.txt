@@ -1,0 +1,35 @@
+# Ashby boards to scrape, one per line.
+#
+# Each line is a board slug: the segment in
+#   https://jobs.ashbyhq.com/<slug>
+# which is also the one the public API expects:
+#   https://api.ashbyhq.com/posting-api/job-board/<slug>
+#
+# An optional display name may follow the slug, separated by whitespace. Use it
+# when the slug is not a readable company name, or when one company has several
+# boards and you want them to look alike in the store.
+#
+#   slug              use the slug as the company name
+#   slug  Display Name
+#
+# Blank lines are ignored. A line starting with '#' is a comment. To stop
+# scraping a board, delete its line (existing rows are kept).
+
+ramp
+snowflake
+harvey
+sierra
+cursor
+notion
+plaid
+xero
+uipath
+vanta
+replit
+netgear
+lemonade
+oyster
+ironcladhq  Ironclad
+dave        Dave
+zapier
+openai
