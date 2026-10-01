@@ -58,6 +58,18 @@ from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.widgets import DataTable, Footer, Header, Input, Static, TabbedContent, TabPane
 
+try:  # pragma: no cover - exercised by the import, not by a test
+    from textual._cells import cell_len as _cell_len
+except ImportError:  # pragma: no cover - only on a Textual that moved it
+    def _cell_len(text: str) -> int:
+        """Fallback width measure, counting every character as one cell.
+
+        Wrong for wide CJK characters, which occupy two columns, so truncation
+        would overflow by one column per wide character. Only reached if
+        Textual's private ``_cells`` module disappears.
+        """
+        return len(text)
+
 from ...core import db as core_db
 from ...core.models import Job
 from .. import queries as q
@@ -66,6 +78,19 @@ from .. import queries as q
 #: reading, so a bounded load keeps the UI responsive; narrowing happens through
 #: search and filters rather than scrolling.
 DEFAULT_PAGE_SIZE = 300
+
+#: Characters of a job title shown in the list before it is cut off.
+#:
+#: Sized to fit the list pane, not to show the whole title: the pane is about
+#: 3/5 of the terminal, so ~90 columns at a 150-wide terminal, and the other six
+#: columns need roughly 34 of those. A larger value makes DataTable scroll
+#: horizontally, which hides the leading columns and shows a window into the
+#: title rather than its start. Titles are also long (one Workday posting runs to
+#: 180 characters), so truncation is expected; the detail pane shows it in full.
+TITLE_WIDTH = 60
+
+#: Shown in place of the removed characters.
+ELLIPSIS = "\u2026"
 
 TABS = (
     ("new", "New"),
@@ -81,6 +106,35 @@ TABS = (
 #: No longer a cycle: each status has its own key (see BINDINGS), so setting a
 #: status is one keystroke rather than pressing ``s`` until the right one shows.
 VALID_STATUSES = ("new", "seen", "applied", "hidden")
+
+
+def truncate(text: str, width: int) -> str:
+    """Cut ``text`` to ``width`` display columns, marking the cut with an ellipsis.
+
+    Measured in terminal cells rather than characters, because they differ: a CJK
+    character occupies two columns, so 60 characters of Japanese is about 85
+    columns and would overflow a 60-column field. ``len()`` is wrong for exactly
+    the titles this app sees most.
+
+    The marker is counted in the width, so the result never exceeds it. Text that
+    already fits is returned unchanged, and a cut never leaves a trailing space
+    before the marker.
+    """
+    if width <= 0:
+        return ""
+    if _cell_len(text) <= width:
+        return text
+
+    budget = width - _cell_len(ELLIPSIS)
+    kept: list[str] = []
+    used = 0
+    for character in text:
+        size = _cell_len(character)
+        if used + size > budget:
+            break
+        kept.append(character)
+        used += size
+    return "".join(kept).rstrip() + ELLIPSIS
 
 
 @dataclass(slots=True)
@@ -140,7 +194,18 @@ class JobsTable(DataTable):
     def on_mount(self) -> None:
         self.cursor_type = "row"
         self.zebra_stripes = True
-        self.add_columns("ID", "Rating", "Status", "Company", "Title", "Location", "Score")
+        keys = self.add_columns(
+            "ID",
+            "Rating",
+            "Status",
+            "Company",
+            "Title",
+            "Location",
+            "Score",
+        )
+        # Fixed rather than auto: the cap is the point, and a fixed column keeps
+        # the freed width available to the columns that were also being clipped.
+        self.columns[keys[4]].width = TITLE_WIDTH
 
 
 class JobDetail(VerticalScroll):
@@ -497,7 +562,7 @@ class JobApp(App[None]):
             "—" if job.rating is None else str(job.rating),
             job.status,
             job.company,
-            job.title,
+            truncate(job.title, TITLE_WIDTH),
             job.location or "",
             "" if row.score is None else f"{row.score:.3f}",
         )
