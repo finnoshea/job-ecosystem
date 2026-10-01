@@ -227,9 +227,6 @@ def _detail_text(
     if job.repost_count:
         meta.append(f"reseen {job.repost_count}\u00d7")
     lines.append("   ".join(meta))
-
-    if job.url:
-        lines.append(f"[dim]{job.url}[/dim]")
     lines.append("")
 
     if job.description:
@@ -254,6 +251,16 @@ class JobApp(App[None]):
     #search-bar { height: auto; padding: 0 1; }
     JobsTable { height: 1fr; }
     TabPane { height: 1fr; }
+    /* The URL bar exists to be selected with the mouse: one short line, the URL
+       and nothing else, so a drag captures exactly it and no line wrapping
+       splits it. keep it fixed-height (never auto) so long URLs are truncated
+       rather than wrapped onto a second row. */
+    #url-bar {
+        height: 1;
+        padding: 0 1;
+        background: $panel;
+        text-overflow: ellipsis;
+    }
     """
 
     # Plain digits are left alone: the search box wants them, and rating lives
@@ -321,6 +328,7 @@ class JobApp(App[None]):
                                 )
                         yield JobsTable(id=f"table-{key}")
             yield JobDetail(id="detail")
+        yield Static("", id="url-bar")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -421,17 +429,23 @@ class JobApp(App[None]):
         )
 
     def update_detail(self) -> None:
-        """Re-render the detail pane for the current selection."""
+        """Re-render the detail pane and the URL bar for the current selection."""
         pane = self.query_one("#detail", JobDetail)
+        bar = self.query_one("#url-bar", Static)
         row = self.selected_row()
         if row is None:
             pane.show(None)
+            bar.update("")
             return
+        job = row.job
+        # Plain text, no markup and no dim styling: this line is meant to be
+        # selected with the mouse, and styles add nothing to a copy.
+        bar.update(job.url or "[dim]no URL stored for this job[/dim]")
         pane.show(
             row,
-            stale=row.job.id in self._stale_ids,
-            duplicate_count=self._repost_counts.get(row.job.id, 0),
-            is_reposted=row.job.id in self._repost_counts,
+            stale=job.id in self._stale_ids,
+            duplicate_count=self._repost_counts.get(job.id, 0),
+            is_reposted=job.id in self._repost_counts,
         )
 
     # -- selection helpers -------------------------------------------------
