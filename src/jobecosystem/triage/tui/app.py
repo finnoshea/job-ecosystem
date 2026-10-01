@@ -24,6 +24,7 @@ Keys
     x        hide the selected job
     ctrl+0-5 rate the selected job (same key again clears it)
     d        fetch the selected job's description (if missing)
+    c        copy the selected job's URL to the local clipboard
     ctrl+e   find jobs similar to the selected one
     r        reload the current tab
     q        quit
@@ -32,6 +33,12 @@ Statuses are set directly rather than cycled: one key per state, so the result
 is never ambiguous and "back to new" is a single press. Marking a job changes
 which tab it appears in, but never destroys it -- see the New, Applied and All
 tabs.
+
+``c`` exists because copying text out of a full-screen application is otherwise
+awkward: Textual enables mouse reporting, so the terminal cannot select text
+itself, and whether Shift or Option suspends that depends on the terminal. OSC 52
+(the mechanism behind ``copy_to_clipboard``) puts the text on the clipboard of
+the machine you are sitting at, over SSH included.
 
 Embedding search is a separate action, not a live filter: typing in the Search
 box matches keywords, while ``ctrl+e`` on a job finds others like it. The query
@@ -260,6 +267,7 @@ class JobApp(App[None]):
         Binding("z", "set_status('new')", "New"),
         Binding("x", "set_status('hidden')", "Hide"),
         Binding("d", "fetch_description", "Describe"),
+        Binding("c", "copy_url", "Copy URL"),
         Binding("ctrl+e", "similar_to_selected", "More like this"),
         Binding("right_square_bracket", "next_tab", "Next tab", key_display="]"),
         Binding("left_square_bracket", "prev_tab", "Prev tab", key_display="["),
@@ -544,6 +552,28 @@ class JobApp(App[None]):
                 "No embedding for this job yet; run the embedder first",
                 severity="warning",
             )
+
+    def action_copy_url(self) -> None:
+        """Copy the selected job's URL to the local clipboard.
+
+        Uses OSC 52, so the text lands on the clipboard of whatever terminal you
+        are sitting at, even over SSH -- which is the only way to get text out of
+        a full-screen app reliably. Mouse reporting stops the terminal from
+        selecting text itself, and neither Shift nor Option bypasses that in
+        every terminal.
+        """
+        job = self.selected_job()
+        if job is None:
+            self.notify("No job selected", severity="warning")
+            return
+        if not job.url:
+            self.notify(
+                f"No URL stored for {job.source}:{job.external_id}",
+                severity="warning",
+            )
+            return
+        self.copy_to_clipboard(job.url)
+        self.notify(f"Copied {job.url}")
 
     def action_fetch_description(self) -> None:
         """Fetch a missing description without blocking the UI.
