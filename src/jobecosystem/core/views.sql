@@ -35,12 +35,22 @@ FROM jobs;
 -- jobs_today: the daily review queue -- jobs first seen in the 24h window
 -- before the newest scrape.
 -- ---------------------------------------------------------------------------
+-- Ordered by first_seen_at, the column the WHERE clause filters on, so one
+-- index can serve both the filter and the sort. Ordering by posted_at could
+-- not: no index covers it together with the date range, so SQLite sorted every
+-- matching row in a temp B-tree before applying LIMIT -- 590 ms to return 300
+-- rows, and worse with an OFFSET, against 8 ms for jobs_unseen.
+--
+-- The visible difference is row order within the tab: newest-seen first rather
+-- than newest-posted first. posted_at is null for every Workday row (their
+-- listings carry no usable date) and its NULLS LAST handling was what made the
+-- sort unavoidable.
 CREATE VIEW jobs_today AS
 SELECT j.*
 FROM jobs j, scrape_anchor a
 WHERE a.anchor IS NOT NULL
   AND j.first_seen_at > datetime(a.anchor, '-1 day')
-ORDER BY j.posted_at DESC NULLS LAST, j.first_seen_at DESC;
+ORDER BY j.first_seen_at DESC, j.id DESC;
 
 -- ---------------------------------------------------------------------------
 -- jobs_unseen: everything not yet triaged. This is the TUI's default filter.

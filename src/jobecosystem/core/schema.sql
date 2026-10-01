@@ -50,6 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_jobs_status_seen
     ON jobs (status, last_seen_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_rating       ON jobs (rating);
 CREATE INDEX IF NOT EXISTS idx_jobs_last_seen_at ON jobs (last_seen_at);
+-- Journals the "today" window filters and sorts on; see migration 3.
+CREATE INDEX IF NOT EXISTS idx_jobs_first_seen_at ON jobs (first_seen_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_posted_at    ON jobs (posted_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_salary_min   ON jobs (salary_min);
 -- Partial: rows without a description are excluded, so the "needs fetching"

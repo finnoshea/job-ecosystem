@@ -278,6 +278,8 @@ class JobApp(App[None]):
         Binding("ctrl+e", "similar_to_selected", "More like this"),
         Binding("right_square_bracket", "next_tab", "Next tab", key_display="]"),
         Binding("left_square_bracket", "prev_tab", "Prev tab", key_display="["),
+        Binding("greater_than_sign", "next_page", "Next page", key_display=">"),
+        Binding("less_than_sign", "prev_page", "Prev page", key_display="<"),
         # One footer entry for the whole rating range; six would crowd the bar.
         Binding("ctrl+0", "rate(0)", "Rate 0-5", key_display="ctrl+0..5", show=True),
         *[
@@ -308,6 +310,14 @@ class JobApp(App[None]):
         self._similar_to: int | None = None
         self._similar_rows: list[Row] = []
         self._similar_for: str | None = None
+        #: Zero-based page within the active tab. Reset whenever the result set
+        #: changes -- a page number means nothing across different queries.
+        self._page = 0
+        #: Cached row count for the active tab, and the key it was computed for.
+        #: Counting a view is a full scan (a second on a large table), and the
+        #: header used to run it twice per refresh; the key means a stale count
+        #: can never be shown for a different tab or query.
+        self._count_cache: tuple[tuple[str, str], int] | None = None
 
     # -- composition -------------------------------------------------------
 
@@ -337,13 +347,22 @@ class JobApp(App[None]):
 
     # -- data loading ------------------------------------------------------
 
-    def refresh_view(self, *, keep_cursor: bool = False, focus_table: bool = True) -> None:
-        """Reload the active tab and re-render.
+    def refresh_view(
+        self,
+        *,
+        keep_cursor: bool = False,
+        focus_table: bool = True,
+        reset_page: bool = True,
+    ) -> None:
+        """Reload the active tab at the current page and re-render.
 
         ``focus_table=False`` when a caller wants to leave focus elsewhere --
         notably the search box, which must keep focus after a search returns.
+        ``reset_page=False`` for a pager move, which has already set the page.
         """
         tab = self._active_tab
+        if reset_page:
+            self._page = 0
         previous = self.selected_row_id() if keep_cursor else None
 
         try:
@@ -374,37 +393,101 @@ class JobApp(App[None]):
         self.update_header()
 
     def load_rows(self, tab: str) -> list[Row]:
-        """Fetch the rows for one tab, through the query layer only."""
+        """Fetch the current page for one tab, through the query layer only."""
         size = self.page_size
+        offset = self._page * size
         if tab == "new":
-            return [Row(j) for j in q.jobs_unseen(self.conn, limit=size)]
+            return [Row(j) for j in q.jobs_unseen(self.conn, limit=size, offset=offset)]
         if tab == "today":
-            return [Row(j) for j in q.jobs_today(self.conn, limit=size)]
+            return [Row(j) for j in q.jobs_today(self.conn, limit=size, offset=offset)]
         if tab == "applied":
-            return [Row(j) for j in q.jobs_by_status(self.conn, "applied", limit=size)]
+            return [
+                Row(j)
+                for j in q.jobs_by_status(
+                    self.conn, "applied", limit=size, offset=offset
+                )
+            ]
         if tab == "all":
-            return [Row(j) for j in q.jobs_all(self.conn, limit=size)]
+            return [Row(j) for j in q.jobs_all(self.conn, limit=size, offset=offset)]
         if tab == "reposted":
-            return [Row(j) for j in q.jobs_reposted(self.conn, limit=size)]
+            return [
+                Row(j) for j in q.jobs_reposted(self.conn, limit=size, offset=offset)
+            ]
         if tab == "stale":
-            return [Row(j) for j in q.jobs_stale(self.conn, limit=size)]
+            return [Row(j) for j in q.jobs_stale(self.conn, limit=size, offset=offset)]
         if tab == "search":
             if not self._search_text:
                 return []
-            return [Row(j) for j in q.search_jobs(self.conn, self._search_text, limit=size)]
+            return [
+                Row(j)
+                for j in q.search_jobs(
+                    self.conn, self._search_text, limit=size, offset=offset
+                )
+            ]
         if tab == "similar":
-            # Similarity results are computed by the caller that has the vectors,
-            # not by a query of their own. "More like this job" re-queries from
-            # the stored vector; a text search re-renders its cached results.
-            if self._similar_to is not None:
-                return [
-                    Row(found.job, found.score)
-                    for found in q.similar_to_job(
-                        self.conn, self._similar_to, limit=size
-                    )
-                ]
-            return list(self._similar_rows)
+            # Similarity is ranked in Python, so this tab is the one whose
+            # results are paged after the fact rather than by the query.
+            return self.similar_rows()[offset : offset + size]
         return []
+
+    def similar_rows(self) -> list[Row]:
+        """The whole Similar-tab result set, before paging.
+
+        "More like this job" re-queries from the stored vector; a text search
+        re-renders the results it already computed.
+        """
+        if self._similar_to is not None:
+            return [
+                Row(found.job, found.score)
+                for found in q.similar_to_job(self.conn, self._similar_to)
+            ]
+        return list(self._similar_rows)
+
+    def count_rows(self, tab: str) -> int:
+        """Total rows the tab holds, for the page indicator.
+
+        Cached per (tab, query), because counting a view is a full scan -- about
+        a second on a 15k-row database -- and the header needs it on every
+        refresh. The cache key includes the search text so switching queries
+        cannot show a stale total.
+        """
+        key = (tab, self._search_text if tab == "search" else "")
+        if self._count_cache is not None and self._count_cache[0] == key:
+            return self._count_cache[1]
+
+        total = self.count_rows_uncached(tab)
+        self._count_cache = (key, total)
+        return total
+
+    def count_rows_uncached(self, tab: str) -> int:
+        """Count the rows a tab holds, straight from the query layer."""
+        if tab == "new":
+            return q.count_jobs(self.conn, view="jobs_unseen")
+        if tab == "today":
+            return q.count_jobs(self.conn, view="jobs_today")
+        if tab == "applied":
+            return q.count_jobs(self.conn, status="applied")
+        if tab == "all":
+            return q.count_jobs(self.conn)
+        if tab == "reposted":
+            return q.count_jobs(self.conn, view="jobs_reposted")
+        if tab == "stale":
+            return q.count_jobs(self.conn, view="jobs_stale")
+        if tab == "search":
+            return (
+                q.count_jobs(self.conn, text=self._search_text)
+                if self._search_text
+                else 0
+            )
+        if tab == "similar":
+            return len(self.similar_rows())
+        return 0
+
+    @property
+    def page_count(self) -> int:
+        """Pages in the active tab. Never zero, so indicators read 1/1."""
+        total = self.count_rows(self._active_tab)
+        return max(1, -(-total // self.page_size))
 
     @staticmethod
     def format_row(row: Row) -> tuple[str, str, str, str, str, str, str]:
@@ -420,12 +503,22 @@ class JobApp(App[None]):
         )
 
     def update_header(self) -> None:
+        """Say where you are: this page, and how much is in the database.
+
+        The page indicator is the point of the change it accompanies -- a capped
+        list is otherwise indistinguishable from a short one, which is exactly
+        the confusion a silent 300-row default caused.
+        """
         progress = q.description_progress(self.conn)
         total = progress.get("total_jobs") or 0
         pending = progress.get("pending") or 0
         shown = len(self.rows)
+        in_tab = self.count_rows(self._active_tab)
+        pages = max(1, -(-in_tab // self.page_size))
+        where = f"page {self._page + 1}/{pages}" if pages > 1 else "1 page"
         self.sub_title = (
-            f"{shown} shown · {total} jobs · {pending} awaiting descriptions"
+            f"{shown} of {in_tab} shown ({where}) · {total} jobs ·"
+            f" {pending} awaiting descriptions"
         )
 
     def update_detail(self) -> None:
@@ -513,6 +606,25 @@ class JobApp(App[None]):
             return
         self.query_one(TabbedContent).active = key
 
+    def action_next_page(self) -> None:
+        """Show the next page, if there is one."""
+        self.go_to_page(self._page + 1)
+
+    def action_prev_page(self) -> None:
+        """Show the previous page, if there is one."""
+        self.go_to_page(self._page - 1)
+
+    def go_to_page(self, page: int) -> None:
+        """Move to a page, clamped to the range."""
+        last = self.page_count - 1
+        page = max(0, min(page, last))
+        if page == self._page:
+            self.notify("Already on the first page" if page == 0 else "Already on the last page")
+            return
+        self._page = page
+        self.refresh_view(reset_page=False)
+        self.notify(f"Page {page + 1} of {last + 1} ({len(self.rows)} rows)")
+
     def action_next_tab(self) -> None:
         current = [key for key, _ in TABS].index(self._active_tab)
         self.go_to_tab((current + 1) % len(TABS))
@@ -540,6 +652,9 @@ class JobApp(App[None]):
             self.notify(f"Already {status}")
             return
         q.set_status(self.conn, job.id, status)
+        # A status change moves the row between tabs, so the cached totals are
+        # no longer true. Only mutations invalidate; a plain refresh does not.
+        self._count_cache = None
         self.notify(f"{job.title[:40]}: {status}")
         self.refresh_view(keep_cursor=True)
 
@@ -640,6 +755,7 @@ class JobApp(App[None]):
         A short write, so doing it here does not perceptibly block the UI, and it
         keeps every connection use on one thread.
         """
+        self._count_cache = None
         if outcome.error:
             self.notify(outcome.error, severity="error")
         elif outcome.fetched is not None:

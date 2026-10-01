@@ -52,6 +52,37 @@ _VIEWS = (
     "jobs_with_embeddings",
 )
 
+#: How to count a view without running its ORDER BY.
+#:
+#: ``SELECT COUNT(*) FROM some_view`` executes the view's ordering too, which for
+#: a view that sorts costs as much as fetching it -- 931 ms for jobs_today on a
+#: 14k-row table. These are the same predicates, stated directly against SQL
+#: table ``jobs`` where the indexes can serve them: 2.6 ms.
+#:
+#: Any view listed here must be kept in step with ``views.sql`` by hand; the
+#: tests compare each count against the view's own length, so a divergence fails
+#: rather than silently returning the wrong total.
+_VIEW_COUNTS: dict[str, str] = {
+    "jobs_today": (
+        "SELECT COUNT(*) FROM jobs j, scrape_anchor a"
+        " WHERE a.anchor IS NOT NULL"
+        " AND j.first_seen_at > datetime(a.anchor, '-1 day')"
+    ),
+    "jobs_stale": (
+        "SELECT COUNT(*) FROM jobs j, scrape_anchor a"
+        " WHERE j.status <> 'applied'"
+        " AND a.anchor IS NOT NULL"
+        " AND ("
+        "   j.last_seen_at < datetime(a.anchor, '-14 days')"
+        "   OR ("
+        "     j.posted_at IS NOT NULL"
+        "     AND j.first_seen_at = j.last_seen_at"
+        "     AND j.posted_at < datetime(a.anchor, '-60 days')"
+        "   )"
+        " )"
+    ),
+}
+
 Scope = Literal["filtered", "all"]
 
 VALID_STATUSES = ("new", "seen", "applied", "hidden")
@@ -160,26 +191,62 @@ def _placeholders(values: Sequence[Any]) -> str:
     return ", ".join("?" * len(values))
 
 
+def _paginate(
+    sql: str,
+    params: list[Any],
+    *,
+    limit: int | None,
+    offset: int = 0,
+) -> tuple[str, list[Any]]:
+    """Append LIMIT/OFFSET to a query that already has an ORDER BY.
+
+    SQLite ignores OFFSET unless a LIMIT is present, so an offset with no limit
+    is written ``LIMIT -1 OFFSET n`` -- -1 being SQLite's "no limit". Without
+    that, paging past the end would silently repeat the first page.
+    """
+    if limit is None and not offset:
+        return sql, params
+    if limit is None:
+        return sql + " LIMIT -1 OFFSET ?", [*params, offset]
+    return sql + " LIMIT ? OFFSET ?", [*params, limit, offset]
+
+
 # ---------------------------------------------------------------------------
 # view readers
 # ---------------------------------------------------------------------------
 
 def jobs_today(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Jobs first seen within the last day of scrape activity."""
-    return _read_view(conn, "jobs_today", filters=filters, limit=limit)
+    return _read_view(
+        conn, "jobs_today", filters=filters, limit=limit, offset=offset
+    )
 
 
 def jobs_unseen(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Jobs not yet triaged -- the default list."""
-    return _read_view(conn, "jobs_unseen", filters=filters, limit=limit)
+    return _read_view(
+        conn, "jobs_unseen", filters=filters, limit=limit, offset=offset
+    )
 
 
 def jobs_reposted(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Jobs seen more than once, or whose content appears under several rows.
 
@@ -187,21 +254,35 @@ def jobs_reposted(
     ``content_hash`` a repost cannot be distinguished from a same-titled
     opening.
     """
-    return _read_view(conn, "jobs_reposted", filters=filters, limit=limit)
+    return _read_view(
+        conn, "jobs_reposted", filters=filters, limit=limit, offset=offset
+    )
 
 
 def jobs_stale(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Jobs not seen recently, or never re-seen long after posting."""
-    return _read_view(conn, "jobs_stale", filters=filters, limit=limit)
+    return _read_view(
+        conn, "jobs_stale", filters=filters, limit=limit, offset=offset
+    )
 
 
 def jobs_needing_descriptions(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """The description work queue, newest first."""
-    return _read_view(conn, "jobs_needing_descriptions", filters=filters, limit=limit)
+    return _read_view(
+        conn, "jobs_needing_descriptions", filters=filters, limit=limit, offset=offset
+    )
 
 
 def jobs_by_status(
@@ -210,6 +291,7 @@ def jobs_by_status(
     *,
     filters: JobFilter | None = None,
     limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Jobs with one triage status, most recently seen first.
 
@@ -241,9 +323,7 @@ def jobs_by_status(
         f"SELECT j.* FROM jobs j WHERE {' AND '.join(clauses)}"
         " ORDER BY j.last_seen_at DESC, j.id DESC"
     )
-    if limit is not None:
-        sql += " LIMIT ?"
-        params.append(limit)
+    sql, params = _paginate(sql, params, limit=limit, offset=offset)
     return [Job.from_row(row) for row in conn.execute(sql, params)]
 
 
@@ -280,7 +360,11 @@ def repost_info(conn: sqlite3.Connection) -> dict[int, int]:
 
 
 def jobs_all(
-    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[Job]:
     """Every job, most recently seen first.
 
@@ -303,9 +387,7 @@ def jobs_all(
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
     sql += " ORDER BY j.last_seen_at DESC, j.id DESC"
-    if limit is not None:
-        sql += " LIMIT ?"
-        params.append(limit)
+    sql, params = _paginate(sql, params, limit=limit, offset=offset)
     return [Job.from_row(row) for row in conn.execute(sql, params)]
 
 
@@ -315,6 +397,7 @@ def _read_view(
     *,
     filters: JobFilter | None,
     limit: int | None,
+    offset: int = 0,
 ) -> list[Job]:
     """Read one view, applying the filter in Python and the limit in SQL.
 
@@ -327,18 +410,22 @@ def _read_view(
     if limit is not None and limit <= 0:
         return []
 
-    # Over-fetch when filtering, since some rows will be discarded.
-    fetch_limit = limit if filters is None or limit is None else None
+    # Over-fetch when filtering, since some rows will be discarded -- and the
+    # offset then has to be applied after filtering, not in SQL, or a page
+    # boundary would skip rows.
+    filtering = filters is not None
+    fetch_limit = None if filtering else limit
+    fetch_offset = 0 if filtering else offset
     sql = f"SELECT * FROM {view}"
     params: list[Any] = []
-    if fetch_limit is not None:
-        sql += " LIMIT ?"
-        params.append(fetch_limit)
+    sql, params = _paginate(sql, params, limit=fetch_limit, offset=fetch_offset)
 
     jobs = [Job.from_row(row) for row in conn.execute(sql, params)]
-    if filters is not None:
+    if filtering:
+        assert filters is not None
         jobs = [job for job in jobs if filters.matches(job)]
-    return jobs[:limit] if limit is not None else jobs
+        return jobs[offset : offset + limit] if limit is not None else jobs[offset:]
+    return jobs
 
 
 def get_job(conn: sqlite3.Connection, job_id: int) -> Job | None:
@@ -373,6 +460,7 @@ def search_jobs(
     *,
     filters: JobFilter | None = None,
     limit: int = 200,
+    offset: int = 0,
     newest_first: bool = True,
 ) -> list[Job]:
     """Keyword search over title and description.
@@ -411,11 +499,79 @@ def search_jobs(
     order = "j.first_seen_at DESC, j.id DESC" if newest_first else "j.id DESC"
     sql = (
         f"SELECT j.* FROM jobs j WHERE {' AND '.join(clauses)}"
-        f" ORDER BY {order} LIMIT ?"
+        f" ORDER BY {order}"
     )
-    params.append(limit)
-
+    sql, params = _paginate(sql, params, limit=limit, offset=offset)
     return [Job.from_row(row) for row in conn.execute(sql, params)]
+
+
+def count_jobs(
+    conn: sqlite3.Connection,
+    *,
+    filters: JobFilter | None = None,
+    text: str | None = None,
+    view: str | None = None,
+    status: str | None = None,
+) -> int:
+    """How many rows a reader would return in total.
+
+    Needed for paging: without it the UI can only say "there is at least one
+    more page", not which page it is on or how many remain. Counted in SQL
+    rather than by fetching, so it stays cheap.
+
+    ``view`` counts a view, ``status`` counts one triage status, and passing
+    neither counts the whole table. ``text`` applies the same keyword predicate
+    as :func:`search_jobs`, so a count always describes the search it labels.
+    """
+    if view is not None and view not in _VIEWS:
+        raise QueryError(f"unknown view {view!r}")
+    if status is not None and status not in VALID_STATUSES:
+        raise QueryError(
+            f"invalid status {status!r}; expected one of {list(VALID_STATUSES)}"
+        )
+    if view is not None and status is not None:
+        raise QueryError("pass either view or status, not both")
+
+    # A view brings its own WHERE, so anything extra has to be applied by an
+    # outer query over it; the bare table takes the clauses directly.
+    source = f"(SELECT * FROM {view}) AS j" if view is not None else "jobs AS j"
+
+    # Fast path: an unfiltered count of a view that has a stated predicate can
+    # skip the view entirely, and with it the ordering that made it slow.
+    if view is not None and not text and filters is None and status is None:
+        stated = _VIEW_COUNTS.get(view)
+        if stated is not None:
+            return int(conn.execute(stated).fetchone()[0])
+
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    if status is not None:
+        clauses.append("j.status = ?")
+        params.append(status)
+
+    if text:
+        for term in text.split():
+            clauses.append(
+                "(LOWER(COALESCE(j.title, '')) LIKE ?"
+                " OR LOWER(COALESCE(j.description, '')) LIKE ?)"
+            )
+            pattern = f"%{term.lower()}%"
+            params.extend([pattern, pattern])
+
+    if filters is not None:
+        # The status clause is added above, so a filter carrying its own would
+        # contradict it; drop that field rather than AND-ing it in.
+        where_filters = replace(filters, statuses=()) if status else filters
+        filter_sql, filter_params = where_filters.where(alias="j")
+        if filter_sql:
+            clauses.append(filter_sql)
+            params.extend(filter_params)
+
+    sql = f"SELECT COUNT(*) FROM {source}"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    return int(conn.execute(sql, params).fetchone()[0])
 
 
 # ---------------------------------------------------------------------------
