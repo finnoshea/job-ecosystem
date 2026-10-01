@@ -17,12 +17,23 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DB_PATH = _REPO_ROOT / "jobs.db"
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 VIEWS_PATH = Path(__file__).with_name("views.sql")
+_MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
 # Ordered (version, name, script) migrations. Append new migrations here and
 # never edit an entry that has already shipped.
+#
+# Migration 1 is schema.sql, which uses IF NOT EXISTS throughout so it is
+# idempotent. Later migrations live in ``migrations/`` and must be additive:
+# adding a column, adding an index, backfilling -- never a destructive change
+# that would break a scraper running against the older shape.
 _MIGRATIONS: tuple[tuple[int, str, Path], ...] = (
     (1, "schema", SCHEMA_PATH),
+    (2, "triage_indexes", _MIGRATIONS_DIR / "002_triage_indexes.sql"),
 )
+
+#: Highest migration version this code knows about. Tests compare against it so
+#: adding a migration does not require editing them.
+LATEST_VERSION: int = _MIGRATIONS[-1][0]
 
 # Bootstrapped in Python so the very first migration has a ledger to write to.
 _CREATE_MIGRATIONS = """
@@ -70,6 +81,24 @@ def connect(
     caller has already done so on this database (or opened it read-only), and
     be aware that subsequent reads may then reference missing columns or
     views.
+
+    **The connection belongs to the thread that opened it.** ``sqlite3``
+    enforces this by default and raises ``ProgrammingError: SQLite objects
+    created in a thread can only be used in that same thread`` if another thread
+    touches it. Do not pass a connection to a worker thread, and do not set
+    ``check_same_thread=False`` to work around it: that only silences the check,
+    leaving genuine concurrent use to fail later as ``database is locked``.
+
+    The pattern to use instead: do the database work on the owning thread, run
+    only the slow, non-database part (an HTTP request, a model call) on the
+    worker, and hand the result back for the owning thread to store. See
+    :func:`jobecosystem.ingest.sources.workday_description.fetch_description_from_known_url`
+    for a fetch that takes no connection for exactly this reason, and the TUI's
+    ``d`` binding for the round trip.
+
+    In practice this means one connection per process, with the exception of
+    tests. Opening a second connection in another thread is fine -- WAL allows
+    one writer alongside readers -- it is *sharing* one connection that is not.
     """
     db_path = resolve_db_path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)

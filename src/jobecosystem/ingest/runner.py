@@ -24,7 +24,6 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 from ..core import db as core_db
-from ..core.models import Job
 from . import upsert
 from .base import Scraper, ScraperError
 

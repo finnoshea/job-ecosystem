@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal
 
 from ..core import similarity
@@ -202,6 +202,111 @@ def jobs_needing_descriptions(
 ) -> list[Job]:
     """The description work queue, newest first."""
     return _read_view(conn, "jobs_needing_descriptions", filters=filters, limit=limit)
+
+
+def jobs_by_status(
+    conn: sqlite3.Connection,
+    status: str,
+    *,
+    filters: JobFilter | None = None,
+    limit: int | None = None,
+) -> list[Job]:
+    """Jobs with one triage status, most recently seen first.
+
+    Reads the table rather than a view: the views encode *policy* (what is new,
+    what is stale), and "everything I marked applied" is not a policy, just a
+    status lookup. Combines with ``filters``, so a caller can ask for applied
+    jobs from one source.
+    """
+    if status not in VALID_STATUSES:
+        raise QueryError(
+            f"invalid status {status!r}; expected one of {list(VALID_STATUSES)}"
+        )
+    if limit is not None and limit <= 0:
+        return []
+
+    clauses = ["j.status = ?"]
+    params: list[Any] = [status]
+    if filters is not None:
+        # The status clause is added here, so a filter carrying statuses of its
+        # own would be contradictory; drop it rather than AND-ing it in.
+        filter_sql, filter_params = replace(
+            filters, statuses=()
+        ).where(alias="j")
+        if filter_sql:
+            clauses.append(filter_sql)
+            params.extend(filter_params)
+
+    sql = (
+        f"SELECT j.* FROM jobs j WHERE {' AND '.join(clauses)}"
+        " ORDER BY j.last_seen_at DESC, j.id DESC"
+    )
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [Job.from_row(row) for row in conn.execute(sql, params)]
+
+
+def stale_job_ids(conn: sqlite3.Connection) -> set[int]:
+    """Ids of jobs that SQL view ``jobs_stale`` considers stale.
+
+    Consulted by the detail pane so "stale" there means exactly what the Stale
+    tab means. Recomputing the rule in Python would duplicate the view's
+    window arithmetic and drift from it.
+    """
+    return {row[0] for row in conn.execute("SELECT id FROM jobs_stale")}
+
+
+def repost_info(conn: sqlite3.Connection) -> dict[int, int]:
+    """Map of job id to how many *other* rows share its content.
+
+    Reads SQL view ``jobs_reposted``, which is the same source the Reposted tab
+    uses. The value matters because ``repost_count`` only counts a row being
+    seen again after a gap: a job re-listed under a new id has
+    ``repost_count = 0`` yet still appears in the Reposted tab, and the count of
+    duplicate rows is the only evidence of it. Both signals are needed, which is
+    why this returns the view's ``duplicate_content_count`` rather than the
+    row's ``repost_count``.
+
+    Only rows the view selects are returned, so membership doubles as "is this
+    job reposted at all".
+    """
+    return {
+        row["id"]: row["duplicate_content_count"]
+        for row in conn.execute(
+            "SELECT id, duplicate_content_count FROM jobs_reposted"
+        )
+    }
+
+
+def jobs_all(
+    conn: sqlite3.Connection, *, filters: JobFilter | None = None, limit: int | None = None
+) -> list[Job]:
+    """Every job, most recently seen first.
+
+    The escape hatch: the other readers all narrow somewhere, and sometimes the
+    question is simply "what is in here". Pair it with a filter or a keyword
+    search, since on a real database this is thousands of rows.
+    """
+    if limit is not None and limit <= 0:
+        return []
+
+    clauses: list[str] = []
+    params: list[Any] = []
+    if filters is not None:
+        filter_sql, filter_params = filters.where(alias="j")
+        if filter_sql:
+            clauses.append(filter_sql)
+            params.extend(filter_params)
+
+    sql = "SELECT j.* FROM jobs j"
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    sql += " ORDER BY j.last_seen_at DESC, j.id DESC"
+    if limit is not None:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return [Job.from_row(row) for row in conn.execute(sql, params)]
 
 
 def _read_view(

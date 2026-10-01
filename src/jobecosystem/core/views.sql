@@ -79,28 +79,46 @@ ORDER BY j.repost_count DESC, j.last_seen_at DESC;
 -- jobs_stale: ghost-job candidates -- not seen in the last 14 days of scrape
 -- activity, or never re-seen at all long after being posted. Kept separate
 -- from jobs_reposted because "old" and "reposted" are different signals.
+--
+-- Written as a UNION of two single-index branches rather than one OR. SQLite
+-- 3.45.1 stopped applying the "OR optimization" to the OR form and fell back to
+-- a full index scan evaluating the predicate per row -- 20 seconds on a 14k-row
+-- table, against 29 ms for the same database on 3.40.1, which still decomposed
+-- the OR into two indexed searches. The UNION joins them explicitly, so the plan
+-- no longer depends on the planner's mood. Both branches use an existing index:
+-- idx_jobs_last_seen_at and idx_jobs_posted_at.
 -- ---------------------------------------------------------------------------
 CREATE VIEW jobs_stale AS
-SELECT j.*,
-       CASE
-         WHEN a.anchor IS NULL THEN NULL
-         ELSE CAST(
+SELECT * FROM (
+  SELECT j.*,
+         CAST(
            julianday(a.anchor) - julianday(j.last_seen_at)
            AS INTEGER
-         )
-       END AS days_since_seen
-FROM jobs j, scrape_anchor a
-WHERE j.status <> 'applied'
-  AND a.anchor IS NOT NULL
-  AND (
-        j.last_seen_at < datetime(a.anchor, '-14 days')
-     OR (
-          j.posted_at IS NOT NULL
-          AND j.first_seen_at = j.last_seen_at          -- never re-seen since first sighting
-          AND j.posted_at < datetime(a.anchor, '-60 days')
-        )
-      )
-ORDER BY j.last_seen_at ASC;
+         ) AS days_since_seen
+  FROM jobs j, scrape_anchor a
+  WHERE j.status <> 'applied'
+    AND a.anchor IS NOT NULL
+    AND j.last_seen_at < datetime(a.anchor, '-14 days')
+
+  UNION ALL
+
+  SELECT j.*,
+         CAST(
+           julianday(a.anchor) - julianday(j.last_seen_at)
+           AS INTEGER
+         ) AS days_since_seen
+  FROM jobs j, scrape_anchor a
+  WHERE j.status <> 'applied'
+    AND a.anchor IS NOT NULL
+    AND j.posted_at IS NOT NULL
+    AND j.first_seen_at = j.last_seen_at          -- never re-seen since first sighting
+    AND j.posted_at < datetime(a.anchor, '-60 days')
+    -- Excluded so a row matching both branches is not returned twice.
+    AND NOT (j.last_seen_at < datetime(a.anchor, '-14 days'))
+)
+-- Applied to the union, not to each branch: a LIMIT without an ORDER BY would
+-- return arbitrary rows, and callers do pass a limit.
+ORDER BY last_seen_at ASC;
 
 -- ---------------------------------------------------------------------------
 -- jobs_with_embeddings: the candidate set for similarity. Ranking itself

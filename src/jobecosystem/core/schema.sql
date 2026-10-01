@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_content_hash ON jobs (content_hash);
 CREATE INDEX IF NOT EXISTS idx_jobs_company      ON jobs (company);
 CREATE INDEX IF NOT EXISTS idx_jobs_status       ON jobs (status);
+-- Composite, matching how the triage views are actually read: filter on status,
+-- order by last_seen_at. Without it SQLite uses idx_jobs_status, collects every
+-- matching row into a temp B-tree to sort, and only then applies the LIMIT --
+-- seconds of work at ~15k rows to return 300.
+CREATE INDEX IF NOT EXISTS idx_jobs_status_seen
+    ON jobs (status, last_seen_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_rating       ON jobs (rating);
 CREATE INDEX IF NOT EXISTS idx_jobs_last_seen_at ON jobs (last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_posted_at    ON jobs (posted_at);

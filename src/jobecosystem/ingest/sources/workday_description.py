@@ -40,7 +40,7 @@ import random
 import re
 import sqlite3
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -118,6 +118,41 @@ class BatchSummary:
 # fetching
 # ---------------------------------------------------------------------------
 
+@dataclass(slots=True)
+class FetchedDescription:
+    """A description retrieved from the wire, not yet stored.
+
+    The split between fetching and storing exists so a caller on a worker thread
+    can do the HTTP call without touching the database: SQLite objects belong to
+    the thread that created them, so only the fetch runs off-thread and the write
+    is handed back. Carries everything the write needs, so storing does not have
+    to re-read the row.
+    """
+
+    job_id: int
+    text: str
+    content_hash: str
+
+
+@dataclass(slots=True)
+class FetchOutcome:
+    """Result of the read-only half: either a description, or why there isn't one.
+
+    ``skipped`` and ``error`` mirror :class:`DescriptionResult` so a caller that
+    split the two steps can still produce the same shape at the end.
+    """
+
+    job_id: int
+    fetched: FetchedDescription | None = None
+    skipped: bool = False
+    error: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """True when nothing went wrong, whether or not work was done."""
+        return self.error is None
+
+
 def fetch_description(
     conn: sqlite3.Connection,
     job_id: int,
@@ -131,10 +166,41 @@ def fetch_description(
     SQL table ``jobs``. Returns without fetching when the row already has a
     description, unless ``force`` is set.
 
-    Raises nothing for expected failures -- an unreachable endpoint, a missing
+    Composes :func:`fetch_description_from_url` and :func:`store_description`,
+    both of which are usable on their own -- which is what the TUI does, so its
+    network call can run on a worker thread while the write stays on the thread
+    that owns the connection.
+
+    Raises nothing for expected failures: an unreachable endpoint, a missing
     URL, or an unrecognised payload all come back as
     :attr:`DescriptionResult.error`, since callers are a TUI and a cron job and
     neither wants an exception for "that one job is gone".
+    """
+    outcome = fetch_description_from_url(
+        conn, job_id, force=force, fetch_json=fetch_json
+    )
+    if outcome.fetched is None:
+        return DescriptionResult(
+            job_id=job_id, skipped=outcome.skipped, error=outcome.error
+        )
+
+    written = store_description(conn, outcome.fetched, force=force)
+    return DescriptionResult(
+        job_id=job_id, fetched=True, written=written, skipped=not written
+    )
+
+
+def fetch_description_from_url(
+    conn: sqlite3.Connection,
+    job_id: int,
+    *,
+    force: bool = False,
+    fetch_json: FetchJson | None = None,
+) -> FetchOutcome:
+    """Look up what is needed, fetch the description, and compute its hash.
+
+    **Reads the database but never writes it.** Returns an outcome rather than
+    raising, so a caller never has to catch transport errors.
     """
     row = conn.execute(
         "SELECT id, source, company, title, description_url, content_hash, description"
@@ -142,14 +208,14 @@ def fetch_description(
         (job_id,),
     ).fetchone()
     if row is None:
-        return DescriptionResult(job_id=job_id, error=f"no job with id {job_id}")
+        return FetchOutcome(job_id=job_id, error=f"no job with id {job_id}")
 
     if not force and row["content_hash"] is not None:
-        return DescriptionResult(job_id=job_id, skipped=True)
+        return FetchOutcome(job_id=job_id, skipped=True)
 
     url = row["description_url"]
     if not url:
-        return DescriptionResult(
+        return FetchOutcome(
             job_id=job_id,
             error=(
                 f"job {job_id} has no description_url; it was stored from a"
@@ -157,23 +223,58 @@ def fetch_description(
             ),
         )
 
+    return fetch_description_from_known_url(
+        job_id, row["title"], row["company"], url, fetch_json=fetch_json
+    )
+
+
+def fetch_description_from_known_url(
+    job_id: int,
+    title: str,
+    company: str,
+    url: str,
+    *,
+    fetch_json: FetchJson | None = None,
+) -> FetchOutcome:
+    """Fetch and parse a description without touching the database at all.
+
+    This is the piece a worker thread should call: no connection, so no thread
+    affinity to violate. The hash is computed here because it needs the title and
+    company, which the caller already has.
+    """
     fetcher = fetch_json or _http_get_json
     try:
         payload = fetcher(url)
         text = parse_description(payload)
     except FetchError as error:
-        return DescriptionResult(job_id=job_id, error=str(error))
+        return FetchOutcome(job_id=job_id, error=str(error))
     except Exception as error:  # noqa: BLE001 - surfaced as a result, not raised
-        return DescriptionResult(
-            job_id=job_id, error=f"{type(error).__name__}: {error}"
-        )
+        return FetchOutcome(job_id=job_id, error=f"{type(error).__name__}: {error}")
 
-    digest = compute_content_hash(row["title"], row["company"], text)
-    if _store(conn, job_id, text, digest, force=force):
-        return DescriptionResult(job_id=job_id, fetched=True, written=True)
+    return FetchOutcome(
+        job_id=job_id,
+        fetched=FetchedDescription(
+            job_id=job_id,
+            text=text,
+            content_hash=compute_content_hash(title, company, text),
+        ),
+    )
 
-    # Another writer got there first (the conditional UPDATE matched no rows).
-    return DescriptionResult(job_id=job_id, fetched=True, skipped=True)
+
+def store_description(
+    conn: sqlite3.Connection,
+    fetched: FetchedDescription,
+    *,
+    force: bool = False,
+) -> bool:
+    """Write a fetched description. Returns False if another writer won the race.
+
+    The write half, and the only part that must run on the thread that owns the
+    connection.
+    """
+    return _store(
+        conn, fetched.job_id, fetched.text, fetched.content_hash, force=force
+    )
 
 
 def fetch_descriptions(
