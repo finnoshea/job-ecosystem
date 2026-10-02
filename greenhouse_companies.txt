@@ -39,7 +39,7 @@
 # The description is NOT in the listing; it is fetched separately later, so
 # these rows start with a NULL description. See greenhouse.py.
 #
-# Current sizes, for reference: Motional 74, Reddit 150.
+# Current sizes, for reference: Block 223, Motional 74, Reddit 150.
 
 
 # Reddit's careers page is on redditinc.com; the board is still at the common
@@ -49,3 +49,7 @@ reddit    Reddit
 # Motional embeds the board on motional.com/open-positions; the slug is the
 # company name. Verified at 74 openings.
 motional  Motional
+
+# Square is now Block; the Greenhouse board kept the newer name. Its careers
+# site is block.xyz/careers. Verified at 223 openings.
+block     Block

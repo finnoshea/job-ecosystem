@@ -116,3 +116,11 @@ xboxgaming.wd1   xboxgaming  Blizzard_External_Careers  Blizzard
 xboxgaming.wd1   xboxgaming  King_External_Careers      King
 xboxgaming.wd1   xboxgaming  SS_external                Solid State
 xboxgaming.wd1   xboxgaming  CentralTech                Activision Central Tech
+
+
+# Visa (https://www.visa.com/en-us/jobs).
+#
+# robots.txt lists all three sites; Visa_Talent_Portal is disallowed and left
+# out. Sizes when added: Visa 784, Visa_Early_Careers 24.
+visa.wd5         visa        Visa                       Visa
+visa.wd5         visa        Visa_Early_Careers         Visa (Early Careers)
