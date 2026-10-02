@@ -18,8 +18,9 @@ Deliberate choices, mirroring :mod:`jobecosystem.ingest.sources.smartrecruiters`
   inline descriptions with ``?content=true``, but doing so for every job in one
   response is exactly the burst the paced fetch exists to avoid, and it makes
   the listing page huge. Rows are stored description-less (``content_hash``
-  NULL) with ``description_url`` populated; the fetch is a separate step -- see
-  :func:`fetch_description`, a stub for now.
+  NULL) with ``description_url`` populated; the text is fetched later by the
+  shared, paced :mod:`jobecosystem.ingest.sources.description`, which calls
+  :func:`parse_description` here.
 * **One board per scraper.** The board slug is part of the URL, so a company
   with two boards needs two entries (and the ``source`` label is the slug,
   keeping rows distinguishable).
@@ -37,6 +38,7 @@ against a saved payload with no network access.
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import shlex
@@ -48,6 +50,7 @@ from typing import Any
 
 from ...core.models import Job
 from ..base import FetchError, ParseError, Scraper
+from .description import DescriptionError, html_to_text
 
 #: Greenhouse's public posting list, per board.
 LISTING_URL = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs"
@@ -206,21 +209,29 @@ class GreenhouseScraper(Scraper):
             ) from error
 
 
-def fetch_description(*_args, **_kwargs):
-    """Reserved: the separate, paced Greenhouse description fetch.
+def parse_description(payload: Any) -> str:
+    """Extract plain text from a Greenhouse job-detail response.
 
-    Not implemented yet. The listing pass stores rows with ``description IS
-    NULL`` and a populated ``description_url``; fetching the text from that URL
-    is its own step, shaped like
-    :mod:`jobecosystem.ingest.sources.workday_description` (one request per job,
-    spaced, re-runnable, writing back to SQL table ``jobs``). Until it exists,
-    descriptions are simply absent and :func:`parse_listing` is the whole
-    scraper.
+    The detail endpoint adds a ``content`` field, but it is HTML-escaped HTML
+    (``&lt;p&gt;`` rather than ``<p>``), so it is unescaped once before the
+    shared converter strips the tags. Raises :class:`DescriptionError` when
+    there is no usable text, so a silent schema change surfaces as a failure
+    rather than an empty row.
     """
-    raise NotImplementedError(
-        "Greenhouse description fetching is not implemented yet;"
-        " listings are stored without descriptions"
-    )
+    if not isinstance(payload, dict):
+        raise DescriptionError(
+            f"detail response was {type(payload).__name__}, expected an object"
+        )
+
+    content = payload.get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise DescriptionError("'content' is missing or empty")
+
+    text = html_to_text(html.unescape(content))
+    if not text:
+        # Present but nothing but markup: treat as a failure, not a description.
+        raise DescriptionError("description contained no text after HTML stripping")
+    return text
 
 
 # ---------------------------------------------------------------------------

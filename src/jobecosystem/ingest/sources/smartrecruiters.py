@@ -18,9 +18,10 @@ Deliberate choices, mirroring :mod:`jobecosystem.ingest.sources.workday`:
 
 * **No description on the listing pass.** Fetching one per job would turn a
   handful of list requests into thousands. Rows are stored description-less
-  (``content_hash`` NULL) with ``description_url`` populated, and the paced
-  fetch is a separate operation -- see :func:`fetch_description`, which is a
-  stub for now.
+  (``content_hash`` NULL) with ``description_url`` populated; the text is
+  fetched later by the shared, paced
+  :mod:`jobecosystem.ingest.sources.description`, which calls
+  :func:`parse_description` here.
 * **One company per scraper.** The company identifier is part of the URL, so a
   company with two SmartRecruiters sites needs two entries (and the ``source``
   label is the identifier, keeping rows distinguishable).
@@ -49,6 +50,7 @@ from urllib.parse import urlencode
 
 from ...core.models import Job
 from ..base import FetchError, ParseError, Scraper
+from .description import DescriptionError, html_to_text
 
 #: SmartRecruiters' public posting list, per company.
 LISTING_URL = "https://api.smartrecruiters.com/v1/companies/{company}/postings"
@@ -293,21 +295,47 @@ class SmartRecruitersScraper(Scraper):
         return payload
 
 
-def fetch_description(*_args, **_kwargs):
-    """Reserved: the separate, paced SmartRecruiters description fetch.
+def parse_description(payload: Any) -> str:
+    """Extract plain text from a SmartRecruiters job-detail response.
 
-    Not implemented yet. The listing pass stores rows with ``description IS
-    NULL`` and a populated ``description_url``; fetching the text from that URL
-    is its own step, shaped like
-    :mod:`jobecosystem.ingest.sources.workday_description` (one request per job,
-    spaced, re-runnable, writing back to SQL table ``jobs``). Until it exists,
-    descriptions are simply absent and :func:`parse_listing` is the whole
-    scraper.
+    The detail endpoint returns ``jobAd.sections``, a mapping of named sections
+    (``companyDescription``, ``jobDescription``, ``qualifications``,
+    ``additionalInformation``), each with a ``title`` and HTML ``text``. They
+    are concatenated in order; a section title is kept as a heading because the
+    column feeds embeddings and keyword matching.
+
+    Raises :class:`DescriptionError` when there is no usable text, so a silent
+    schema change surfaces as a failure rather than an empty row.
     """
-    raise NotImplementedError(
-        "SmartRecruiters description fetching is not implemented yet;"
-        " listings are stored without descriptions"
-    )
+    if not isinstance(payload, dict):
+        raise DescriptionError(
+            f"detail response was {type(payload).__name__}, expected an object"
+        )
+
+    job_ad = payload.get("jobAd")
+    sections = job_ad.get("sections") if isinstance(job_ad, dict) else None
+    if not isinstance(sections, dict):
+        raise DescriptionError("detail response has no 'jobAd.sections' object")
+
+    parts: list[str] = []
+    for section in sections.values():
+        if not isinstance(section, dict):
+            continue
+        raw = section.get("text")
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        body = html_to_text(raw)
+        if not body:
+            continue
+        title = section.get("title")
+        if isinstance(title, str) and title.strip():
+            parts.append(f"{title.strip()}\n{body}")
+        else:
+            parts.append(body)
+
+    if not parts:
+        raise DescriptionError("'jobAd.sections' contained no text")
+    return "\n\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

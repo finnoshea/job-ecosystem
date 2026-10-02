@@ -93,7 +93,7 @@ def connect(
     The pattern to use instead: do the database work on the owning thread, run
     only the slow, non-database part (an HTTP request, a model call) on the
     worker, and hand the result back for the owning thread to store. See
-    :func:`jobecosystem.ingest.sources.workday_description.fetch_description_from_known_url`
+    :func:`jobecosystem.ingest.sources.description.fetch_description_from_known_url`
     for a fetch that takes no connection for exactly this reason, and the TUI's
     ``d`` binding for the round trip.
 

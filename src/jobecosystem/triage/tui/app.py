@@ -835,27 +835,30 @@ class JobApp(App[None]):
             return
 
         self.notify("Fetching description…")
-        self.fetch_description(job.id, job.title, job.company, job.description_url)
+        self.fetch_description(
+            job.id, job.title, job.company, job.description_url, job.source
+        )
 
     @work(exclusive=True, thread=True)
     def fetch_description(
-        self, job_id: int, title: str, company: str, url: str
+        self, job_id: int, title: str, company: str, url: str, source: str
     ) -> None:
         """Worker: the network call only, with no database access.
 
         Everything needed was read on the owning thread and passed in, so this
-        touches no SQLite object. The result is handed back for the main thread
-        to store -- see :func:`_store_fetched_description`.
+        touches no SQLite object. ``source`` selects the payload parser. The
+        result is handed back for the main thread to store -- see
+        :func:`_store_fetched_description`.
 
-        Imported inside the worker so the TUI does not require the Workday module
-        (or httpx) unless a fetch is actually requested.
+        Imported inside the worker so the TUI does not require the vendor
+        modules (or httpx) unless a fetch is actually requested.
         """
-        from ...ingest.sources.workday_description import (
+        from ...ingest.sources.description import (
             fetch_description_from_known_url,
         )
 
         outcome = fetch_description_from_known_url(
-            job_id, title, company, url
+            job_id, title, company, url, source=source
         )
         self.call_from_thread(self._store_fetched_description, outcome)
 
@@ -869,7 +872,7 @@ class JobApp(App[None]):
         if outcome.error:
             self.notify(outcome.error, severity="error")
         elif outcome.fetched is not None:
-            from ...ingest.sources.workday_description import store_description
+            from ...ingest.sources.description import store_description
 
             if store_description(self.conn, outcome.fetched):
                 self.notify("Description stored")
