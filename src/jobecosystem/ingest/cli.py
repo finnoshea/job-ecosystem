@@ -30,6 +30,7 @@ from ..core import db as core_db
 from . import runner
 from .base import Scraper
 from .sources.ashby_boards import build_scrapers as build_ashby_scrapers
+from .sources.greenhouse import build_scrapers as build_greenhouse_scrapers
 from .sources.smartrecruiters import build_scrapers as build_smartrecruiters_scrapers
 from .sources.workday_tenants import build_scrapers as build_workday_scrapers
 
@@ -100,6 +101,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--greenhouse-companies",
+        metavar="PATH",
+        default=None,
+        help=(
+            "board list file; defaults to $GREENHOUSE_BOARDS_FILE,"
+            " then greenhouse_companies.txt"
+        ),
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="print nothing on success; errors still go to stderr",
@@ -127,16 +137,21 @@ def select_scrapers(args: argparse.Namespace) -> Selection:
     include_ashby = not family or "ashby" in family
     include_workday = not family or "workday" in family
     include_smartrecruiters = not family or "smartrecruiters" in family
+    include_greenhouse = not family or "greenhouse" in family
 
-    # Order is the fetch order, and it is deliberate: Ashby first, then
-    # SmartRecruiters, and Workday last. Workday is both the largest and the
-    # most likely to be slow or flaky, so it does not hold up the sources whose
-    # results arrive sooner.
+    # Order is the fetch order, and it is deliberate: the single-request boards
+    # first, Workday last. Workday is both the largest and the most likely to be
+    # slow or flaky, so it does not hold up the sources whose results arrive
+    # sooner.
     if include_ashby:
         selection.scrapers.extend(build_ashby_scrapers(args.ashby_boards))
     if include_smartrecruiters:
         selection.scrapers.extend(
             build_smartrecruiters_scrapers(args.smartrecruiters_companies)
+        )
+    if include_greenhouse:
+        selection.scrapers.extend(
+            build_greenhouse_scrapers(args.greenhouse_companies)
         )
     if include_workday:
         selection.scrapers.extend(build_workday_scrapers(args.workday_tenants))
@@ -211,7 +226,8 @@ def run(
         if not len(selection):
             print(
                 f"{PROGRAM}: no sources configured; check ashby_boards.txt,"
-                " workday_tenants.txt, and smartrecruiters_companies.txt",
+                " smartrecruiters_companies.txt, greenhouse_companies.txt, and"
+                " workday_tenants.txt",
                 file=err,
             )
             return EXIT_SETUP_FAILED

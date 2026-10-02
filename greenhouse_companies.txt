@@ -1,0 +1,51 @@
+# Greenhouse companies to scrape, one board per line.
+#
+# The Greenhouse job-board API is public and per board, and a board is
+# identified by a single slug (like Ashby, and unlike Workday). Each line:
+#
+#   board  [Display Name]
+#
+# WHERE THE PARTS COME FROM
+#
+# Most boards live at
+#
+#   https://job-boards.greenhouse.io/{board}/jobs/{id}
+#   https://boards.greenhouse.io/{board}
+#                                ^^^^^ board slug
+#
+# Some companies embed the board on their own careers page and it is not visible
+# in the URL (Reddit and Motional both do). The slug is still in the page source
+# as a `gh_jid` link or a job-boards.greenhouse.io reference; otherwise open
+# DevTools -> Network, filter for "greenhouse", and read the request URL.
+#
+# VERIFY A BOARD BEFORE ADDING IT
+#
+# The API needs no key or session and reports the total:
+#
+#   curl -s "https://boards-api.greenhouse.io/v1/boards/motional/jobs" | head -c 200
+#   -> {"jobs":[ ... ],"meta":{"total":74}}
+#
+# A wrong slug returns HTTP 404, and a board with no openings returns an empty
+# "jobs" list, so a failure is loud rather than a silent zero.
+#
+# DISPLAY NAME
+#
+#   Optional. Shown in the triage UI's Company column. Defaults to the company
+#   name the API returns, then to the board slug.
+#
+# Blank lines and lines starting with '#' are ignored. Boards are compared as
+# written; the same board on two lines is one source, first line wins.
+#
+# The description is NOT in the listing; it is fetched separately later, so
+# these rows start with a NULL description. See greenhouse.py.
+#
+# Current sizes, for reference: Motional 74, Reddit 150.
+
+
+# Reddit's careers page is on redditinc.com; the board is still at the common
+# slug. Verified against boards-api.greenhouse.io/v1/boards/reddit/jobs.
+reddit    Reddit
+
+# Motional embeds the board on motional.com/open-positions; the slug is the
+# company name. Verified at 74 openings.
+motional  Motional
