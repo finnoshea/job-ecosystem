@@ -82,6 +82,7 @@ warnerbros.wd5  	warnerbros  	global				WarnerBros
 walmart.wd504  		walmart  	WalmartExternal			Walmart
 goodrx.wd1  		goodrx  	Careers				GoodRx
 
+
 # ASMLEXT1 is ASML's largest site (641 openings vs 191 on ASMLPrivate1), but
 # robots.txt asks crawlers not to touch it:
 #   Disallow: /ASMLEXT1/
@@ -99,3 +100,19 @@ salesforce.wd12  salesforce  External_Career_Site        Salesforce
 # salesforce.wd12  salesforce  Slack                       Slack
 # salesforce.wd12  salesforce  Tableau                     Tableau
 # salesforce.wd12  salesforce  Salesforce_Research         Salesforce Research
+
+
+# Activision Blizzard King (https://careers.activision.com).
+#
+# That careers site is a Phenom People front-end; the postings underneath are
+# Workday, and the old activision.wd1 tenant is dead (HTTP 422/500). Since the
+# Microsoft acquisition they are served from the shared xboxgaming.wd1 tenant,
+# whose robots.txt lists the sites below and allows all of them.
+#
+# Sizes when added: External 97, Blizzard 39, King 30, SS_external 3,
+# CentralTech 2; DL_external and HOH had no openings and are left out.
+xboxgaming.wd1   xboxgaming  External                   Activision
+xboxgaming.wd1   xboxgaming  Blizzard_External_Careers  Blizzard
+xboxgaming.wd1   xboxgaming  King_External_Careers      King
+xboxgaming.wd1   xboxgaming  SS_external                Solid State
+xboxgaming.wd1   xboxgaming  CentralTech                Activision Central Tech
