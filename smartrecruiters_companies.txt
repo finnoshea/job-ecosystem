@@ -1,0 +1,54 @@
+# SmartRecruiters companies to scrape, one per line.
+#
+# SmartRecruiters' public job API is per company, and a company is identified by
+# a single slug (unlike Workday, which needs host + tenant + site). Each line:
+#
+#   identifier  [country]  [Display Name]
+#
+# WHERE THE PARTS COME FROM
+#
+# A company's SmartRecruiters site is usually at
+#
+#   https://jobs.smartrecruiters.com/{identifier}/{posting-id}-{slug}
+#                                       ^^^^^^^^^^
+#
+# Some companies hide it behind a branded front-end (Red Bull uses
+# jobs.redbull.com). Any of these reveals the identifier:
+#
+#   * a "jobs.smartrecruiters.com/..." link anywhere on the page;
+#   * "SMART_RECRUITERS" in the page's JSON (e.g. Next.js __NEXT_DATA__);
+#   * DevTools -> Network, filter for "smartrecruiters.com" and read the URL.
+#
+# VERIFY AN IDENTIFIER BEFORE ADDING IT
+#
+# The API is public, needs no key or session, and answers with a total:
+#
+#   curl -s "https://api.smartrecruiters.com/v1/companies/RedBull/postings?limit=1" | head -c 200
+#   -> {"offset":0,"limit":1,"totalFound":1230,"content":[ ... ]}
+#
+# A wrong identifier returns totalFound 0 or HTTP 404, so it fails loudly rather
+# than silently scraping nothing.
+#
+# COUNTRY
+#
+#   Optional. A two-letter ISO code (e.g. us) fetches only that country; '*' or
+#   omitting it fetches every country. The filter is applied by the server, so
+#   it is cheaper than fetching everything and discarding most of it.
+#
+#   Only the second token is treated as a country when it is '*' or exactly two
+#   letters. Anything else is read as the start of the display name.
+#
+# DISPLAY NAME
+#
+#   Optional. Shown in the triage UI's Company column. Defaults to the company
+#   name the API returns, then to the identifier.
+#
+# Blank lines and lines starting with '#' are ignored. Identifiers are compared
+# as written; the same company on two lines is one source, first line wins.
+#
+# Current sizes, for reference: Red Bull 1230 worldwide, 470 in the US.
+# The description is NOT in these listings; it is fetched separately later, so
+# these rows start with a NULL description. See smartrecruiters.py.
+
+
+RedBull  us  Red Bull
