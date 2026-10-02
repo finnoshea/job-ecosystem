@@ -424,11 +424,26 @@ class JobApp(App[None]):
         ``focus_table=False`` when a caller wants to leave focus elsewhere --
         notably the search box, which must keep focus after a search returns.
         ``reset_page=False`` for a pager move, which has already set the page.
+
+        With ``keep_cursor`` the viewport is pinned across the rebuild: the
+        highlighted job is found again by id and the scroll offset is put back.
+        A mutation removes a row and shifts every later one, so without this the
+        table would jump back to the top on each keypress.
         """
         tab = self._active_tab
         if reset_page:
             self._page = 0
-        previous = self.selected_row_id() if keep_cursor else None
+
+        table = self.query_one(f"#table-{tab}", JobsTable)
+        if keep_cursor:
+            selected = self.selected_row()
+            previous = self.selected_row_id()
+            selected_id = selected.job.id if selected is not None else None
+            saved_scroll = table.scroll_offset
+        else:
+            previous = None
+            selected_id = None
+            saved_scroll = None
 
         try:
             rows = self.load_rows(tab)
@@ -441,21 +456,49 @@ class JobApp(App[None]):
         # the views, not by anything on the row, so the pane needs them looked up.
         self._stale_ids = q.stale_job_ids(self.conn)
         self._repost_counts = q.repost_info(self.conn)
-        table = self.query_one(f"#table-{tab}", JobsTable)
         table.clear()
-        for index, row in enumerate(rows):
-            table.add_row(*self.format_row(row), key=str(index))
+        for row in rows:
+            # Keyed by job id, not position: after a mutation the rows shift, and
+            # a positional key would point at a different job than before.
+            table.add_row(*self.format_row(row), key=str(row.job.id))
 
-        # Restore the cursor before focusing, so the highlighted row is right.
-        if previous is not None and previous < len(rows):
-            table.move_cursor(row=previous)
+        # Prefer the same job over the same index -- the row it occupied may now
+        # hold its neighbour. When the job has left the view, keep the cursor at
+        # the nearest surviving row rather than snapping to the top.
+        restore = self.index_of_job(selected_id) if selected_id is not None else None
+        if restore is None and previous is not None and rows:
+            restore = min(previous, len(rows) - 1)
+        if restore is not None:
+            table.move_cursor(row=restore)
         elif rows:
             table.move_cursor(row=0)
+
+        # move_cursor scrolls the cursor into view on the next refresh; run after
+        # it so the restored offset, not the cursor, is what the viewport shows.
+        if saved_scroll is not None:
+            self.call_after_refresh(self._restore_scroll, table, saved_scroll.y)
 
         if focus_table:
             table.focus()
         self.update_detail()
         self.update_header()
+
+    def index_of_job(self, job_id: int | None) -> int | None:
+        """Row index of a job in the current result set, or ``None`` if absent."""
+        if job_id is None:
+            return None
+        for index, row in enumerate(self.rows):
+            if row.job.id == job_id:
+                return index
+        return None
+
+    def _restore_scroll(self, table: JobsTable, y: float) -> None:
+        """Put a saved scroll offset back after a rebuild.
+
+        Scheduled after the cursor's own deferred scroll so it has the last word;
+        the new content may be shorter, which the ``scroll_y`` setter clamps.
+        """
+        table.scroll_y = y
 
     def load_rows(self, tab: str) -> list[Row]:
         """Fetch the current page for one tab, through the query layer only."""
@@ -721,7 +764,9 @@ class JobApp(App[None]):
         # no longer true. Only mutations invalidate; a plain refresh does not.
         self._count_cache = None
         self.notify(f"{job.title[:40]}: {status}")
-        self.refresh_view(keep_cursor=True)
+        # A mutation changes the rows but not which page you are reading: keeping
+        # the page and the scroll offset is what stops the jump to the top.
+        self.refresh_view(keep_cursor=True, reset_page=False)
 
     def action_rate(self, rating: int) -> None:
         job = self.selected_job()
@@ -730,7 +775,7 @@ class JobApp(App[None]):
         # Pressing the current rating clears it, so a mistake is undoable.
         new_rating = None if job.rating == rating else rating
         q.set_rating(self.conn, job.id, new_rating)
-        self.refresh_view(keep_cursor=True)
+        self.refresh_view(keep_cursor=True, reset_page=False)
 
     def action_similar_to_selected(self) -> None:
         job = self.selected_job()
@@ -830,7 +875,7 @@ class JobApp(App[None]):
                 self.notify("Description stored")
             else:
                 self.notify("Already had the description")
-        self.refresh_view(keep_cursor=True)
+        self.refresh_view(keep_cursor=True, reset_page=False)
 
     # -- embedding search --------------------------------------------------
 
