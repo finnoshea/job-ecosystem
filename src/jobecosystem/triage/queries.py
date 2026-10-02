@@ -454,6 +454,25 @@ def get_jobs(conn: sqlite3.Connection, job_ids: Sequence[int]) -> list[Job]:
 # keyword search
 # ---------------------------------------------------------------------------
 
+#: Columns a keyword search looks at. Kept in one place so :func:`search_jobs`
+#: and :func:`count_jobs` cannot drift: the count has to describe the same
+#: predicate as the results, or the page indicator lies.
+_SEARCH_COLUMNS = ("title", "company", "location", "description")
+
+
+def _text_clause(term: str) -> tuple[str, list[Any]]:
+    """A case-insensitive substring match for one term across the search columns.
+
+    Returns the SQL fragment and its parameters together, so the two callers
+    cannot build one without the other.
+    """
+    pattern = f"%{term.lower()}%"
+    ors = " OR ".join(
+        f"LOWER(COALESCE(j.{column}, '')) LIKE ?" for column in _SEARCH_COLUMNS
+    )
+    return f"({ors})", [pattern] * len(_SEARCH_COLUMNS)
+
+
 def search_jobs(
     conn: sqlite3.Connection,
     text: str,
@@ -463,19 +482,20 @@ def search_jobs(
     offset: int = 0,
     newest_first: bool = True,
 ) -> list[Job]:
-    """Keyword search over title and description.
+    """Keyword search over title, company, location, and description.
 
-    A plain substring match over both columns, case-insensitive. FTS5 would rank
-    better but needs a virtual table and sync triggers; at tens of thousands of
-    rows this is fast enough and needs no machinery.
+    A plain substring match over those columns, case-insensitive. FTS5 would
+    rank better but needs a virtual table and sync triggers; at tens of
+    thousands of rows this is fast enough and needs no machinery.
 
     Multi-word input is matched as separate terms, all of which must appear, for
     the same reason a search engine does it: "python remote" should not require
-    that exact phrase in the text. Each term may appear in either column.
+    that exact phrase in the text. Each term may appear in any of the columns.
 
     Note that ``description`` is NULL until the paced fetch has run, so early on
-    this effectively searches titles only. Callers may want to say so in the UI
-    rather than presenting an empty result as "no matches".
+    this effectively searches title, company, and location only. Callers may
+    want to say so in the UI rather than presenting an empty result as "no
+    matches".
     """
     terms = text.split()
     if not terms:
@@ -484,12 +504,9 @@ def search_jobs(
     clauses: list[str] = []
     params: list[Any] = []
     for term in terms:
-        clauses.append(
-            "(LOWER(COALESCE(j.title, '')) LIKE ?"
-            " OR LOWER(COALESCE(j.description, '')) LIKE ?)"
-        )
-        pattern = f"%{term.lower()}%"
-        params.extend([pattern, pattern])
+        clause, term_params = _text_clause(term)
+        clauses.append(clause)
+        params.extend(term_params)
 
     filter_sql, filter_params = (filters or JobFilter()).where(alias="j")
     if filter_sql:
@@ -552,12 +569,9 @@ def count_jobs(
 
     if text:
         for term in text.split():
-            clauses.append(
-                "(LOWER(COALESCE(j.title, '')) LIKE ?"
-                " OR LOWER(COALESCE(j.description, '')) LIKE ?)"
-            )
-            pattern = f"%{term.lower()}%"
-            params.extend([pattern, pattern])
+            clause, term_params = _text_clause(term)
+            clauses.append(clause)
+            params.extend(term_params)
 
     if filters is not None:
         # The status clause is added above, so a filter carrying its own would
