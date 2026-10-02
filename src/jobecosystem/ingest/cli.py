@@ -128,14 +128,18 @@ def select_scrapers(args: argparse.Namespace) -> Selection:
     include_workday = not family or "workday" in family
     include_smartrecruiters = not family or "smartrecruiters" in family
 
+    # Order is the fetch order, and it is deliberate: Ashby first, then
+    # SmartRecruiters, and Workday last. Workday is both the largest and the
+    # most likely to be slow or flaky, so it does not hold up the sources whose
+    # results arrive sooner.
     if include_ashby:
         selection.scrapers.extend(build_ashby_scrapers(args.ashby_boards))
-    if include_workday:
-        selection.scrapers.extend(build_workday_scrapers(args.workday_tenants))
     if include_smartrecruiters:
         selection.scrapers.extend(
             build_smartrecruiters_scrapers(args.smartrecruiters_companies)
         )
+    if include_workday:
+        selection.scrapers.extend(build_workday_scrapers(args.workday_tenants))
 
     if exact:
         selection.scrapers = [
