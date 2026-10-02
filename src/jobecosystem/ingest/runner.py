@@ -90,6 +90,7 @@ def run_scrapers(
     scrapers: Iterable[Scraper],
     *,
     embed: EmbedFn | None = None,
+    on_outcome: Callable[[SourceOutcome], None] | None = None,
 ) -> RunSummary:
     """Run each scraper, upserting its jobs and recording a run row.
 
@@ -98,13 +99,22 @@ def run_scrapers(
     stable of fragile per-vendor parsers on a timer. KeyboardInterrupt and
     similar ``BaseException``\\ s are not caught.
 
+    ``on_outcome`` is called with each :class:`SourceOutcome` as soon as that
+    source finishes and before the next one starts, so a caller can report
+    progress while the run is still going rather than only at the end. It is
+    not called for a source that has not run yet, and an exception it raises is
+    not caught here -- reporting is the caller's job.
+
     Returns a :class:`RunSummary`; the caller inspects it to decide whether to
     alert. Nothing is raised for a scraper failure.
     """
     summary = RunSummary()
 
     for scraper in scrapers:
-        summary.outcomes.append(_run_one(conn, scraper, embed=embed))
+        outcome = _run_one(conn, scraper, embed=embed)
+        summary.outcomes.append(outcome)
+        if on_outcome is not None:
+            on_outcome(outcome)
 
     return summary
 

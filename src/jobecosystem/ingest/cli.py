@@ -212,8 +212,18 @@ def run(
             )
             return EXIT_SETUP_FAILED
 
-        summary = runner.run_scrapers(conn, selection.scrapers)
-        _report(summary, out=out, quiet=args.quiet)
+        summary = runner.run_scrapers(
+            conn,
+            selection.scrapers,
+            # Report each source as it finishes; the totals line below follows
+            # once the last one is done.
+            on_outcome=(
+                None if args.quiet
+                else lambda outcome: _report_outcome(outcome, out=out)
+            ),
+        )
+        if not args.quiet:
+            _report_totals(summary, out=out)
         if not summary.ok:
             print(
                 f"{PROGRAM}: {len(summary.failed_sources)} source(s) failed:"
@@ -226,15 +236,28 @@ def run(
         conn.close()
 
 
-def _report(summary: runner.RunSummary, *, out, quiet: bool) -> None:
-    """Print a one-line-per-source summary.
+def _report_outcome(outcome: runner.SourceOutcome, *, out) -> None:
+    """Print one source's result as soon as that source finishes.
+
+    Flushed immediately: under cron stdout is usually a pipe, and without the
+    flush these lines would sit in the buffer until the process exits -- the
+    very delay this exists to remove.
+    """
+    status = "ok" if outcome.ok else "FAILED"
+    detail = f"{outcome.fetched} fetched, {outcome.inserted} new"
+    if outcome.errors:
+        detail += f", {len(outcome.errors)} error(s)"
+    if outcome.error:
+        detail += f" -- {outcome.error}"
+    print(f"{outcome.source}: {status} ({detail})", file=out, flush=True)
+
+
+def _report_totals(summary: runner.RunSummary, *, out) -> None:
+    """Print the run-wide totals once every source has reported.
 
     Deliberately terse. The database holds the detail; this exists so a failed
-    cron mail says which source broke.
+    cron mail says which source broke and how much moved.
     """
-    if quiet:
-        return
-
     fetched = sum(o.fetched for o in summary)
     inserted = sum(o.inserted for o in summary)
     # Two different kinds of trouble: per-listing errors recorded during a run
@@ -243,19 +266,11 @@ def _report(summary: runner.RunSummary, *, out, quiet: bool) -> None:
     listing_errors = sum(len(o.errors) for o in summary)
     failed = len(summary.failed_sources)
 
-    for outcome in summary:
-        status = "ok" if outcome.ok else "FAILED"
-        detail = f"{outcome.fetched} fetched, {outcome.inserted} new"
-        if outcome.errors:
-            detail += f", {len(outcome.errors)} error(s)"
-        if outcome.error:
-            detail += f" -- {outcome.error}"
-        print(f"{outcome.source}: {status} ({detail})", file=out)
-
     print(
         f"{len(summary)} source(s): {fetched} fetched, {inserted} new,"
         f" {listing_errors} listing error(s), {failed} failed source(s)",
         file=out,
+        flush=True,
     )
 
 
