@@ -80,7 +80,7 @@ pwc.wd3  		pwc  		Global_Experienced_Careers	PriceWaterhouseCooper
 sonyglobal.wd1  	sonyglobal  	SonyGlobalCareers		Sony
 warnerbros.wd5  	warnerbros  	global				WarnerBros
 walmart.wd504  		walmart  	WalmartExternal			Walmart
-
+goodrx.wd1  		goodrx  	Careers				GoodRx
 
 # ASMLEXT1 is ASML's largest site (641 openings vs 191 on ASMLPrivate1), but
 # robots.txt asks crawlers not to touch it:
