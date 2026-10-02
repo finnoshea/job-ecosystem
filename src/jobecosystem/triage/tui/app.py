@@ -932,11 +932,16 @@ class JobApp(App[None]):
 
 
 def build_embedder() -> Callable[[str], Sequence[float]] | None:
-    """The real query embedder, or ``None`` when the model is unavailable.
+    """The real query embedder, or ``None`` when it is unavailable.
 
-    Imported lazily so the TUI starts without torch; a missing embedder degrades
-    embedding search to a notification rather than a crash on startup.
+    Imported lazily so the TUI starts without the embedding client; a missing
+    API key or package degrades embedding search to a notification rather than a
+    crash on startup.
     """
+    import os
+
+    if not os.environ.get("VOYAGE_API_KEY"):
+        return None
     try:
         from ...core.embedder import embed_query
     except Exception:  # noqa: BLE001 - optional dependency

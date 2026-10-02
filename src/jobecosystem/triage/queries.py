@@ -623,7 +623,7 @@ def similar_jobs(
     its own best match.
 
     The embedder is injected rather than imported so that searching does not
-    pull torch into the process unless a text query is actually used: pass a
+    pull in the embedding client unless a text query is actually used: pass a
     vector and this function never touches a model. Raises :class:`QueryError`
     if text is given without an embedder.
     """

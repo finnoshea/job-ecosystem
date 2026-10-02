@@ -6,8 +6,8 @@ vector type, and this is fine for tens of thousands of jobs. If it ever gets
 slow, revisit with the ``sqlite-vec`` extension -- do not add a separate
 vector database.
 
-nomic-embed-text-v1.5 vectors are already unit length after normalization, but
-nothing here assumes that; every comparison normalizes.
+Model vectors are usually unit length after normalization, but nothing here
+assumes that; every comparison normalizes.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ from array import array
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-# Matches the dim column used by core.embedder for nomic-embed-text-v1.5.
-NOMIC_DIM = 768
+# Vector width of the embedding model (voyage-4-lite), used as the fallback in
+# core.embedder.dimension. Voyage's current models are 1024-wide.
+VOYAGE_DIM = 1024
 
 _FLOAT32 = array  # alias for readability below
 

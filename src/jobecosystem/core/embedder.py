@@ -1,87 +1,106 @@
-"""Prefix-aware wrapper around the nomic embedding model.
+"""Wrapper around Voyage AI's embedding API.
 
-nomic-embed-text-v1.5 is asymmetric: documents and queries are embedded with
-different task prefixes, and mixing them up silently degrades search quality
-without erroring. This module makes the distinction explicit in the API rather
-than leaving it to callers to remember.
+Voyage is asymmetric: a stored document and a search query are embedded with
+different ``input_type`` values (``"document"`` vs ``"query"``), and mixing them
+up silently degrades search quality without erroring. This module makes the
+distinction explicit in the API rather than leaving it to callers to remember.
 
-Loading happens lazily and is cached per process. SentenceTransformer is
-imported inside the loader so the text-only parts of the package (schema,
-queries, TUI) do not pay for torch at import time.
-
-The model cache lives in the repo's ``embedders/`` directory via ``HF_HOME``;
-see ``config.py``.
+Unlike the previous local model, embeddings are a hosted call: the client reads
+``VOYAGE_API_KEY`` from the environment, is imported and constructed lazily so
+the text-only parts of the package do not pay for it, and a missing key surfaces
+as :class:`EmbedderError` rather than an import failure. The client is
+injectable so tests never touch the network.
 """
 
 from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from functools import lru_cache
-from pathlib import Path
 
 from . import similarity
 
-DEFAULT_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+DEFAULT_MODEL = "voyage-4-lite"
 
-# nomic's documented task prefixes. Anything not in this map is a caller error.
-PREFIX_DOCUMENT = "search_document: "
-PREFIX_QUERY = "search_query: "
-PREFIX_CLUSTERING = "clustering: "
-PREFIX_CLASSIFICATION = "classification: "
+#: Texts per API request. Voyage accepts batches; 128 matches its documented
+#: safe maximum and keeps a single request payload small.
+DEFAULT_BATCH_SIZE = 128
 
-TASK_PREFIXES = {
-    "document": PREFIX_DOCUMENT,
-    "query": PREFIX_QUERY,
-    "clustering": PREFIX_CLUSTERING,
-    "classification": PREFIX_CLASSIFICATION,
+#: Voyage's ``input_type`` values. Stored documents and search queries must use
+#: the matching one.
+INPUT_DOCUMENT = "document"
+INPUT_QUERY = "query"
+
+#: Known per-model vector widths, so :func:`dimension` needs no API call.
+#: Anything not listed falls back to the default width.
+MODEL_DIMENSIONS = {
+    "voyage-3-lite": 512,
+    "voyage-large-2": 1536,
 }
 
 
 class EmbedderError(RuntimeError):
-    """Raised when the model is missing or a vector cannot be produced."""
+    """Raised when the API key is missing or a vector cannot be produced."""
 
 
-def _repo_root() -> Path:
-    # src/jobecosystem/core/embedder.py -> core -> jobecosystem -> src -> root
-    return Path(__file__).resolve().parents[3]
+#: The Voyage client, cached after the first successful construction. Injected
+#: by tests via :func:`set_client`.
+_client = None
+
+#: Tokens billed across this process, for the CLI to report. Reset per run.
+_usage_tokens = 0
 
 
-def configure_hf_home() -> Path:
-    """Point Hugging Face's cache at the repo's ``embedders/`` directory.
+def set_client(client) -> None:
+    """Install a client (tests) or clear the cache with ``None``."""
+    global _client
+    _client = client
 
-    Set before the model loads; respects an existing ``HF_HOME`` so tests or an
-    unusual install can redirect the cache.
+
+def get_client():
+    """Return the cached Voyage client, constructing it on first use.
+
+    Raises :class:`EmbedderError` when the key is absent or the package is not
+    installed, so callers get one exception type to handle.
     """
-    existing = os.environ.get("HF_HOME")
-    if existing:
-        return Path(existing).expanduser()
-    hf_home = _repo_root() / "embedders"
-    hf_home.mkdir(parents=True, exist_ok=True)
-    os.environ["HF_HOME"] = str(hf_home)
-    return hf_home
+    global _client
+    if _client is not None:
+        return _client
 
-
-@lru_cache(maxsize=1)
-def get_model(model_id: str = DEFAULT_MODEL):
-    """Load and cache the SentenceTransformer for this process.
-
-    Raises :class:`EmbedderError` if the dependency is missing or the model
-    cannot be loaded, so callers get one exception type to handle.
-    """
-    configure_hf_home()
+    if not os.environ.get("VOYAGE_API_KEY"):
+        raise EmbedderError(
+            "VOYAGE_API_KEY is not set; export it or pass a client via set_client()"
+        )
     try:
-        from sentence_transformers import SentenceTransformer
+        import voyageai
     except ImportError as error:  # pragma: no cover - environment problem
         raise EmbedderError(
-            "sentence-transformers is not installed; run `pip install "
-            "sentence-transformers` in the project virtualenv"
+            "the voyageai package is not installed; run `pip install voyageai`"
         ) from error
 
     try:
-        return SentenceTransformer(model_id)
+        _client = voyageai.Client()
     except Exception as error:  # noqa: BLE001 - surfaced as one type on purpose
-        raise EmbedderError(f"could not load embedding model {model_id!r}: {error}") from error
+        raise EmbedderError(f"could not create the Voyage client: {error}") from error
+    return _client
+
+
+def reset_usage() -> None:
+    """Zero the token counter, before a batch run."""
+    global _usage_tokens
+    _usage_tokens = 0
+
+
+def total_tokens_used() -> int:
+    """Tokens billed since the last :func:`reset_usage`."""
+    return _usage_tokens
+
+
+def _add_usage(tokens) -> None:
+    global _usage_tokens
+    try:
+        _usage_tokens += int(tokens or 0)
+    except (TypeError, ValueError):
+        pass
 
 
 def embedding_model_name(model_id: str = DEFAULT_MODEL) -> str:
@@ -90,30 +109,24 @@ def embedding_model_name(model_id: str = DEFAULT_MODEL) -> str:
 
 
 def dimension(model_id: str = DEFAULT_MODEL) -> int:
-    """Vector width of ``model_id``, or :data:`similarity.NOMIC_DIM` as fallback."""
-    try:
-        model = get_model(model_id)
-        # Renamed in sentence-transformers 6; support both spellings.
-        getter = getattr(model, "get_embedding_dimension", None) or (
-            model.get_sentence_embedding_dimension
-        )
-        return int(getter())
-    except EmbedderError:
-        return similarity.NOMIC_DIM
+    """Vector width of ``model_id``, defaulting to :data:`similarity.VOYAGE_DIM`."""
+    return MODEL_DIMENSIONS.get(model_id, similarity.VOYAGE_DIM)
 
 
 def embed_documents(
     texts: Sequence[str],
     *,
     model_id: str = DEFAULT_MODEL,
-    batch_size: int = 32,
+    batch_size: int = DEFAULT_BATCH_SIZE,
 ) -> list[list[float]]:
-    """Embed job descriptions for storage, with the document prefix applied.
+    """Embed job descriptions for storage, with ``input_type="document"``.
 
-    Empty or whitespace-only strings are still embedded (as the bare prefix)
-    rather than dropped, so result indices line up with the input.
+    Batched into requests of at most ``batch_size`` texts; the returned vectors
+    line up one-for-one with the input.
     """
-    return _embed(texts, task="document", model_id=model_id, batch_size=batch_size)
+    return _embed(
+        texts, input_type=INPUT_DOCUMENT, model_id=model_id, batch_size=batch_size
+    )
 
 
 def embed_query(
@@ -121,8 +134,10 @@ def embed_query(
     *,
     model_id: str = DEFAULT_MODEL,
 ) -> list[float]:
-    """Embed a single search query, with the query prefix applied."""
-    return _embed([text], task="query", model_id=model_id, batch_size=1)[0]
+    """Embed a single search query, with ``input_type="query"``."""
+    return _embed(
+        [text], input_type=INPUT_QUERY, model_id=model_id, batch_size=1
+    )[0]
 
 
 def embed_document(
@@ -130,36 +145,44 @@ def embed_document(
     *,
     model_id: str = DEFAULT_MODEL,
 ) -> list[float]:
-    """Embed a single job description, with the document prefix applied."""
-    return _embed([text], task="document", model_id=model_id, batch_size=1)[0]
+    """Embed a single job description, with ``input_type="document"``."""
+    return _embed(
+        [text], input_type=INPUT_DOCUMENT, model_id=model_id, batch_size=1
+    )[0]
 
 
 def _embed(
     texts: Sequence[str],
     *,
-    task: str,
+    input_type: str,
     model_id: str,
     batch_size: int,
 ) -> list[list[float]]:
-    if task not in TASK_PREFIXES:
+    if input_type not in (INPUT_DOCUMENT, INPUT_QUERY):
         raise ValueError(
-            f"unknown task {task!r}; expected one of {sorted(TASK_PREFIXES)}"
+            f"unknown input_type {input_type!r}; expected {INPUT_DOCUMENT!r}"
+            f" or {INPUT_QUERY!r}"
         )
     if not texts:
         return []
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
 
-    prefix = TASK_PREFIXES[task]
-    prepared = [f"{prefix}{(text or '').strip()}" for text in texts]
-
-    model = get_model(model_id)
-    vectors = model.encode(
-        prepared,
-        batch_size=batch_size,
-        normalize_embeddings=True,   # so cosine reduces to a dot product
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
-    return [vector.tolist() for vector in vectors]
+    client = get_client()
+    vectors: list[list[float]] = []
+    for start in range(0, len(texts), batch_size):
+        batch = [str(text) for text in texts[start : start + batch_size]]
+        try:
+            response = client.embed(
+                texts=batch, model=model_id, input_type=input_type
+            )
+        except Exception as error:  # noqa: BLE001 - normalized for callers
+            raise EmbedderError(
+                f"Voyage embed failed for {model_id!r}: {error}"
+            ) from error
+        vectors.extend(response.embeddings)
+        _add_usage(getattr(response, "total_tokens", 0))
+    return vectors
 
 
 def embed_document_blob(text: str, *, model_id: str = DEFAULT_MODEL) -> bytes:

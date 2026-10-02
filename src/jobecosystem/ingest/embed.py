@@ -4,8 +4,8 @@ Scraping and description fetching produce rows; this fills ``job_embeddings``
 from the descriptions so the triage UI's similarity search has something to rank
 against. It is deliberately a separate operation from both:
 
-* It needs the embedding model (torch and friends, the ``embed`` extra), which
-  the scrape and describe commands do not.
+* It needs the embedding API (``voyageai``, the ``embed`` extra) and a
+  ``VOYAGE_API_KEY``, which the scrape and describe commands do not.
 * The model call is the expensive part, so it is bounded per run and resumable
   from the database.
 
@@ -13,9 +13,9 @@ The work queue is the set of jobs that have a description but no embedding *for
 the requested model*. A row embedded with a different model is re-embedded, so
 switching models repairs the table instead of mixing incomparable vectors.
 
-Only rows with a description are eligible: an empty document would embed to the
-bare ``search_document: `` prefix and match every other empty document. That is
-also why this runs after the description fetch, not before it.
+Only rows with a description are eligible: an empty document carries no signal
+and would match every other empty document. That is also why this runs after the
+description fetch, not before it.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ def pending_jobs(
 
     Ordered by ``id`` so a run is deterministic and a later run resumes exactly
     where this one stopped. ``force`` re-embeds even rows already embedded with
-    ``model``, for when the prefixes change but the model id does not.
+    ``model``, for when the embedding settings change but the model id does not.
     """
     where = [
         "j.description IS NOT NULL",

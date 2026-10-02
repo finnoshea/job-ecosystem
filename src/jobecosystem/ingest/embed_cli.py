@@ -3,7 +3,7 @@
 Intended for cron, like ``jobecosystem-scrape`` and ``jobecosystem-describe``:
 no prompts, no TTY assumptions, one terse summary, and an exit code the
 scheduler can act on. It is a separate command because it needs the embedding
-model, which the other two deliberately do not.
+API and a ``VOYAGE_API_KEY``, which the other two deliberately do not.
 
     jobecosystem-embed --limit 500             # up to 500 descriptions this run
     jobecosystem-embed --db /tmp/jobs.db       # a different database
@@ -23,6 +23,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from typing import IO, Sequence
@@ -118,9 +119,15 @@ def run(
         return EXIT_SETUP_FAILED
 
     if embed is None:
+        # A missing key is a setup problem, not a per-job failure: fail before
+        # touching the database queue so the exit code says "cannot start".
+        if not os.environ.get("VOYAGE_API_KEY"):
+            print(f"{PROGRAM}: VOYAGE_API_KEY is not set", file=err)
+            return EXIT_SETUP_FAILED
         embed = _model_embedder(args.model, args.batch_size)
 
     try:
+        embedder.reset_usage()
         summary = embed_batch.embed_pending(
             conn,
             embed,
@@ -130,7 +137,7 @@ def run(
             force=args.force,
         )
         if not args.quiet:
-            _report(summary, out=out)
+            _report(summary, tokens=embedder.total_tokens_used(), out=out)
         if summary.failed:
             for job_id, message in summary.failed:
                 print(f"{PROGRAM}: job {job_id}: {message}", file=err)
@@ -154,11 +161,12 @@ def _model_embedder(model_id: str, batch_size: int):
     return embed
 
 
-def _report(summary: embed_batch.EmbedSummary, *, out) -> None:
+def _report(summary: embed_batch.EmbedSummary, *, tokens: int, out) -> None:
     """Print one summary line, flushed for cron's piped stdout."""
     print(
         f"embedded {summary.written} of {summary.attempted}"
-        f" ({summary.written} written, {len(summary.failed)} failed)",
+        f" ({summary.written} written, {len(summary.failed)} failed,"
+        f" {tokens} tokens)",
         file=out,
         flush=True,
     )

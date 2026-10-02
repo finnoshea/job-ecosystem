@@ -12,8 +12,8 @@ It owns the transaction discipline the rest of ``ingest`` assumes:
 * one scraper's failure never prevents the others from running.
 
 Embedding is optional and lazy. The runner takes an embedder callable rather
-than importing one, so the daily scrape does not require the model or torch
-unless embedding is actually requested.
+than importing one, so the daily scrape does not require the embedding client
+or its API calls unless embedding is actually requested.
 """
 
 from __future__ import annotations
@@ -184,7 +184,7 @@ def _embed_jobs(
     Descriptions come from the database rather than from the scraper's objects,
     so what is embedded is exactly what the next run will read. Jobs with no
     description are skipped: an empty document would otherwise all hash to the
-    same prefixed empty string and match each other.
+    same empty document and match each other.
     """
     job_ids = [result.job_id for result in results]
     placeholders = ", ".join("?" * len(job_ids))
