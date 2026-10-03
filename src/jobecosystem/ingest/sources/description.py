@@ -469,7 +469,13 @@ def html_to_text(markup: str) -> str:
 
 
 def _http_get_json(url: str, *, timeout: float = 30.0) -> Any:
-    """Default fetcher: a GET returning decoded JSON, errors normalized."""
+    """Default fetcher: a GET returning decoded JSON, errors normalized.
+
+    Failures name the status code and Content-Type, so a non-JSON body can be
+    told apart after the fact: a 200 with ``text/html`` is a proxy/WAF page,
+    while a 429 is a real rate limit. Without those, both look like an
+    indistinguishable "response was not JSON".
+    """
     import httpx
 
     try:
@@ -482,9 +488,15 @@ def _http_get_json(url: str, *, timeout: float = 30.0) -> Any:
     except httpx.HTTPError as error:
         raise DescriptionError(f"GET {url} failed: {error}") from error
 
+    content_type = response.headers.get("content-type") or "unknown"
     if response.status_code >= 400:
-        raise DescriptionError(f"GET {url}: HTTP {response.status_code}")
+        raise DescriptionError(
+            f"GET {url}: HTTP {response.status_code} ({content_type})"
+        )
     try:
         return response.json()
     except json.JSONDecodeError as error:
-        raise DescriptionError(f"GET {url}: response was not JSON: {error}") from error
+        raise DescriptionError(
+            f"GET {url}: HTTP {response.status_code} ({content_type}):"
+            f" response was not JSON: {error}"
+        ) from error
