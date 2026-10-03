@@ -20,3 +20,7 @@ embedders/
 
 # Local configuration
 .env
+
+# Generated resume PDFs (the JSON base and overlays are tracked; the rendered
+# output is not)
+resume*.pdf

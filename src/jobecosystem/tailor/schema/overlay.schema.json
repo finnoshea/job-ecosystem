@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jobecosystem.local/schema/overlay.schema.json",
+  "title": "Tailoring overlay",
+  "description": "A declarative desired end state. It can select, order, and rephrase items that exist in the base resume; it has no field in which to add a fact.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "base_hash"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "base_hash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "job_id": {"type": ["integer", "null"]},
+        "company": {"type": "string"},
+        "title": {"type": "string"},
+        "url": {"type": "string"}
+      }
+    },
+    "summary": {"type": "string"},
+    "skill_ids": {"type": "array", "items": {"type": "string"}},
+    "role_order": {"type": "array", "items": {"type": "string"}},
+    "roles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "bullets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id"],
+              "properties": {
+                "id": {"type": "string"},
+                "text": {"type": "string"}
+              }
+            }
+          }
+        }
+      }
+    },
+    "notes": {"type": "string"}
+  }
+}
