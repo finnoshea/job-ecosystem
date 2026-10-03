@@ -251,6 +251,22 @@ def fetch_description(
     )
 
 
+def record_attempt(conn: sqlite3.Connection, job_id: int) -> None:
+    """Count one description attempt, committed before the request is made.
+
+    Incremented ahead of the network call so an interrupted or crashed process
+    still consumes the try, and the queue's retry cap cannot loop forever on a
+    dead posting. The TUI calls this too, on the thread that owns the
+    connection, since it splits the fetch from the store.
+    """
+    with conn:
+        conn.execute(
+            "UPDATE jobs SET description_attempts = description_attempts + 1"
+            " WHERE id = ?",
+            (job_id,),
+        )
+
+
 def fetch_description_from_url(
     conn: sqlite3.Connection,
     job_id: int,
@@ -258,11 +274,13 @@ def fetch_description_from_url(
     force: bool = False,
     fetch_json: FetchJson | None = None,
 ) -> FetchOutcome:
-    """Look up what is needed, fetch the description, and compute its hash.
+    """Look up what is needed, count the attempt, fetch, and compute the hash.
 
-    **Reads the database but never writes it.** Returns an outcome rather than
-    raising, so a caller never has to catch transport errors. The row's
-    ``source`` selects the parser.
+    Records the attempt counter (see :func:`record_attempt`) but does not store
+    the description itself -- that is :func:`store_description`, so a caller can
+    keep the fetch on a worker thread. Returns an outcome rather than raising,
+    so a caller never has to catch transport errors. The row's ``source``
+    selects the parser.
     """
     row = conn.execute(
         "SELECT id, source, company, title, description_url, content_hash,"
@@ -274,6 +292,11 @@ def fetch_description_from_url(
 
     if not force and row["content_hash"] is not None:
         return FetchOutcome(job_id=job_id, skipped=True)
+
+    # Counted before the request, so a failed or interrupted fetch still uses up
+    # one of the row's tries. A row with no detail URL counts too; otherwise it
+    # would sit in the queue forever, never able to make a request.
+    record_attempt(conn, job_id)
 
     url = row["description_url"]
     if not url:
@@ -356,16 +379,29 @@ def fetch_descriptions(
 
     Uses SQL view ``jobs_needing_descriptions`` unless ``job_ids`` is given, so
     an interrupted batch simply resumes: completed rows leave the queue by
-    gaining a ``content_hash``. Each row is parsed by its own source's parser.
-    Sleeping is injected so tests do not wait.
+    gaining a ``content_hash``, and rows that have hit the retry cap leave it by
+    being exhausted. ``force`` ignores that cap. Each row is parsed by its own
+    source's parser. Sleeping is injected so tests do not wait.
     """
-    ids = list(job_ids) if job_ids is not None else [
-        row[0] for row in conn.execute(
-            "SELECT id FROM jobs_needing_descriptions LIMIT ?", (limit,)
-        )
-    ]
     if job_ids is not None:
-        ids = ids[:limit]
+        ids = list(job_ids)[:limit]
+    elif force:
+        # The view bakes in the retry cap, so --force cannot read it. Same
+        # conditions minus the attempts filter.
+        ids = [
+            row[0] for row in conn.execute(
+                "SELECT id FROM jobs"
+                " WHERE content_hash IS NULL AND status <> 'hidden'"
+                " ORDER BY status = 'new' DESC, first_seen_at DESC LIMIT ?",
+                (limit,),
+            )
+        ]
+    else:
+        ids = [
+            row[0] for row in conn.execute(
+                "SELECT id FROM jobs_needing_descriptions LIMIT ?", (limit,)
+            )
+        ]
 
     summary = BatchSummary()
     for index, job_id in enumerate(ids):

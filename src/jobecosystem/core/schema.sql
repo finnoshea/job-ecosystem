@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     last_seen_at  TEXT    NOT NULL,                  -- bumped every scrape -> ghost detection
     description_fetched_at TEXT,                     -- when the description was fetched; NULL = only the listing is stored
     description_url TEXT,                             -- where to fetch the full text, for sources that need a second request
+    -- description_attempts (retry counter) is added by migration 004, not
+    -- listed here: a fresh database runs every migration after this one, and
+    -- ALTER TABLE ADD COLUMN has no IF NOT EXISTS to make that idempotent.
     repost_count  INTEGER NOT NULL DEFAULT 0
                   CHECK (repost_count >= 0),         -- bumped on reappearance / reappearance after a gap
     status        TEXT    NOT NULL DEFAULT 'new'     -- triage state, never set by scrapers

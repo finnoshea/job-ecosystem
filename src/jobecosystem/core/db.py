@@ -30,6 +30,7 @@ _MIGRATIONS: tuple[tuple[int, str, Path], ...] = (
     (1, "schema", SCHEMA_PATH),
     (2, "triage_indexes", _MIGRATIONS_DIR / "002_triage_indexes.sql"),
     (3, "first_seen_index", _MIGRATIONS_DIR / "003_first_seen_index.sql"),
+    (4, "description_attempts", _MIGRATIONS_DIR / "004_description_attempts.sql"),
 )
 
 #: Highest migration version this code knows about. Tests compare against it so

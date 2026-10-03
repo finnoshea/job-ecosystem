@@ -161,6 +161,11 @@ SELECT j.*
 FROM jobs j
 WHERE j.content_hash IS NULL
   AND j.status <> 'hidden'
+  -- Retry cap. A row that has failed this many times drops out of the queue
+  -- rather than being re-requested forever; nothing marks it, so it is simply
+  -- no longer described. Kept as a literal because a view cannot take a
+  -- parameter; --force ignores it by querying the table directly.
+  AND j.description_attempts < 5
 ORDER BY j.status = 'new' DESC, j.first_seen_at DESC;
 
 -- ---------------------------------------------------------------------------
@@ -230,7 +235,8 @@ CREATE VIEW description_progress AS
 SELECT COUNT(*)                                            AS total_jobs,
        SUM(CASE WHEN content_hash IS NOT NULL THEN 1 ELSE 0 END)
                                                            AS described,
-       SUM(CASE WHEN content_hash IS NULL THEN 1 ELSE 0 END)
+       SUM(CASE WHEN content_hash IS NULL AND description_attempts < 5
+                THEN 1 ELSE 0 END)
                                                            AS pending,
        ROUND(
          100.0 * SUM(CASE WHEN content_hash IS NOT NULL THEN 1 ELSE 0 END)

@@ -835,6 +835,13 @@ class JobApp(App[None]):
             return
 
         self.notify("Fetching description…")
+        # A human pressing 'd' is an explicit retry, so this deliberately
+        # ignores the queue's retry cap. It still counts the attempt, on the
+        # thread that owns the connection and before the worker makes the
+        # request.
+        from ...ingest.sources.description import record_attempt
+
+        record_attempt(self.conn, job.id)
         self.fetch_description(
             job.id, job.title, job.company, job.description_url, job.source
         )

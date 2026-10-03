@@ -37,6 +37,7 @@ JOB_COLUMNS: tuple[str, ...] = (
     "last_seen_at",
     "description_fetched_at",
     "description_url",
+    "description_attempts",
     "repost_count",
     "status",
     "rating",
@@ -93,6 +94,7 @@ class Job:
     last_seen_at: str | None = None
     description_fetched_at: str | None = None
     description_url: str | None = None
+    description_attempts: int = 0
     repost_count: int = 0
     status: JobStatus = "new"
     rating: int | None = None

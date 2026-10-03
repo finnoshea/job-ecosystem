@@ -82,7 +82,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="refetch jobs that already have a description",
+        help=(
+            "ignore the retry cap and attempt jobs that have already failed 5"
+            " times"
+        ),
     )
     parser.add_argument(
         "--quiet",
