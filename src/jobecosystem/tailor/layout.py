@@ -24,10 +24,10 @@ class Layout:
     """Page and type settings. Lengths are inches (converted by the renderer)."""
 
     page: str = "LETTER"            # LETTER, LEGAL, or A4
-    margin_top: float = 0.6
-    margin_bottom: float = 0.6
-    margin_left: float = 0.7
-    margin_right: float = 0.7
+    margin_top: float = 0.4
+    margin_bottom: float = 0.4
+    margin_left: float = 0.5
+    margin_right: float = 0.5
 
     font: str = "Helvetica"
     font_bold: str = "Helvetica-Bold"

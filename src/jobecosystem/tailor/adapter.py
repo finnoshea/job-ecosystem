@@ -48,6 +48,8 @@ Rules (violating any of them invalidates the result):
   remove, or alter any number, percentage, dollar amount, or date.
 - Your job is to select, order, and re-word the EXISTING content so it mirrors
   the job posting's language. Prefer bullets that overlap the posting.
+- Only include a field when the base resume already has it. In particular, do
+  not add a summary if the base has none -- a blank field stays blank.
 - "role_order" is the complete ordered list of roles to show; omit a role to
   drop it. "roles[id].bullets" is that role's complete ordered bullet list;
   omit a role from "roles" to keep all of its bullets.

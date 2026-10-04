@@ -178,6 +178,7 @@ def _certification(value: Any, where: str) -> Certification:
                          name=_as_str(data.get("name"), f"{where}.name"),
                          issuer=_opt_str(data.get("issuer"), f"{where}.issuer"),
                          date=_opt_str(data.get("date"), f"{where}.date"),
+                         number=_opt_str(data.get("number"), f"{where}.number"),
                          url=_opt_str(data.get("url"), f"{where}.url"))
 
 
@@ -212,6 +213,9 @@ def _render(value: Any) -> RenderSpec:
         template=_opt_str(data.get("template"), "render.template") or default.template,
         section_order=_str_list(data.get("section_order", default.section_order),
                                 "render.section_order"),
+        page_break_before=_str_list(
+            data.get("page_break_before", default.page_break_before),
+            "render.page_break_before"),
         max_roles=_opt_int(data.get("max_roles"), "render.max_roles"),
         bullets_per_role=_opt_int(data.get("bullets_per_role"), "render.bullets_per_role"),
     )
@@ -235,6 +239,7 @@ def resume_from_dict(value: Any) -> Resume:
             _as_list(data.get("certifications", []), "certifications"))],
         awards=[_award(x, f"awards[{i}]")
                 for i, x in enumerate(_as_list(data.get("awards", []), "awards"))],
+        publications=_str_list(data.get("publications", []), "publications"),
         render=_render(data.get("render")),
     )
 
@@ -294,16 +299,18 @@ def resume_to_dict(resume: Resume) -> dict:
         ],
         "certifications": [
             _drop_none({"id": c.id, "name": c.name, "issuer": c.issuer,
-                        "date": c.date, "url": c.url})
+                        "date": c.date, "number": c.number, "url": c.url})
             for c in resume.certifications
         ],
         "awards": [
             _drop_none({"id": a.id, "name": a.name, "issuer": a.issuer, "date": a.date})
             for a in resume.awards
         ],
+        "publications": list(resume.publications),
         "render": _drop_none({
             "template": resume.render.template,
             "section_order": resume.render.section_order,
+            "page_break_before": resume.render.page_break_before,
             "max_roles": resume.render.max_roles,
             "bullets_per_role": resume.render.bullets_per_role,
         }),

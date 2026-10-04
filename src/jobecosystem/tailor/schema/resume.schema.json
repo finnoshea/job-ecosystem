@@ -35,6 +35,7 @@
     "education": {"type": "array", "items": {"$ref": "#/$defs/education"}},
     "certifications": {"type": "array", "items": {"$ref": "#/$defs/certification"}},
     "awards": {"type": "array", "items": {"$ref": "#/$defs/award"}},
+    "publications": {"type": "array", "items": {"type": "string"}},
     "render": {"$ref": "#/$defs/render"}
   },
   "$defs": {
@@ -115,6 +116,7 @@
         "name": {"type": "string", "minLength": 1},
         "issuer": {"type": "string"},
         "date": {"$ref": "#/$defs/date"},
+        "number": {"type": "string"},
         "url": {"type": "string"}
       }
     },
@@ -135,6 +137,7 @@
       "properties": {
         "template": {"type": "string"},
         "section_order": {"type": "array", "items": {"type": "string"}},
+        "page_break_before": {"type": "array", "items": {"type": "string"}},
         "max_roles": {"type": "integer", "minimum": 1},
         "bullets_per_role": {"type": "integer", "minimum": 1}
       }

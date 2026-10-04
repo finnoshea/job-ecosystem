@@ -28,7 +28,7 @@ from .resume import resume_hash
 
 #: Content sections the renderer knows about.
 SECTIONS = ("summary", "skills", "roles", "projects", "education",
-            "certifications", "awards")
+            "certifications", "awards", "publications")
 
 #: Soft caps, to stop a model from producing a wall of text.
 MAX_SUMMARY_CHARS = 1200
@@ -103,6 +103,14 @@ def validate_resume(resume: Resume) -> list[str]:
     unknown = [name for name in resume.render.section_order if name not in SECTIONS]
     if unknown:
         errors.append(f"render.section_order: unknown section(s): {', '.join(unknown)}")
+    unknown_breaks = [
+        name for name in resume.render.page_break_before if name not in SECTIONS
+    ]
+    if unknown_breaks:
+        errors.append(
+            "render.page_break_before: unknown section(s):"
+            f" {', '.join(unknown_breaks)}"
+        )
     if resume.render.max_roles is not None and resume.render.max_roles < 1:
         errors.append("render.max_roles: must be at least 1 when set")
     if resume.render.bullets_per_role is not None and resume.render.bullets_per_role < 1:
@@ -153,9 +161,17 @@ def validate_overlay(base: Resume, overlay: Overlay) -> list[str]:
         )
 
     if overlay.summary is not None:
+        # A field that is blank in the base is closed: the overlay may not fill
+        # it in. Otherwise a model given no summary to rewrite would simply
+        # invent one, and nothing else here would catch ungrounded prose.
+        if base.basics.summary is None:
+            errors.append(
+                "summary: the base resume has no summary, so the overlay may"
+                " not add one"
+            )
         if not overlay.summary.strip():
             errors.append("summary: must not be blank when present")
-        elif len(overlay.summary) > MAX_SUMMARY_CHARS:
+        if len(overlay.summary) > MAX_SUMMARY_CHARS:
             errors.append(
                 f"summary: {len(overlay.summary)} chars exceeds {MAX_SUMMARY_CHARS}"
             )

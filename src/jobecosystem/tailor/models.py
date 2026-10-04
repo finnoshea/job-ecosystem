@@ -87,6 +87,7 @@ class Certification:
     name: str
     issuer: str | None = None
     date: str | None = None
+    number: str | None = None
     url: str | None = None
 
 
@@ -115,9 +116,11 @@ class RenderSpec:
 
     template: str = "default"
     section_order: list[str] = field(default_factory=lambda: [
-        "summary", "skills", "roles", "projects", "education",
-        "certifications", "awards",
+        "summary", "roles", "education", "certifications", "projects",
+        "awards", "skills", "publications",
     ])
+    #: Sections that begin on a fresh page.
+    page_break_before: list[str] = field(default_factory=lambda: ["publications"])
     max_roles: int | None = None
     bullets_per_role: int | None = None
 
@@ -132,6 +135,9 @@ class Resume:
     education: list[Education] = field(default_factory=list)
     certifications: list[Certification] = field(default_factory=list)
     awards: list[Award] = field(default_factory=list)
+    #: Free-form citation lines. Authoring and formatting are the writer's job;
+    #: the renderer only escapes and applies **bold** / *italic*, one line each.
+    publications: list[str] = field(default_factory=list)
     render: RenderSpec = field(default_factory=RenderSpec)
 
 
