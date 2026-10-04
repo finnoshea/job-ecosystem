@@ -44,7 +44,7 @@ class Layout:
     muted_color: str = "#555555"
     rule_color: str = "#c9c9c9"
 
-    section_gap: float = 12         # space above each section, in points
+    section_gap: float = 10         # space above each section, in points
     item_gap: float = 7             # space between roles/entries, in points
     bullet_indent: float = 12
 

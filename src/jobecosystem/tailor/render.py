@@ -162,7 +162,7 @@ def build_flowables(resume: Resume, layout: Layout | None = None) -> list[Any]:
         "meta": style("meta", font=layout.font, size=layout.meta_size,
                       color=muted_color, spaceAfter=2),
         "bullet": style("bullet", font=layout.font, size=layout.body_size,
-                        color=text_color, spaceAfter=2),
+                        color=text_color, spaceAfter=3),
         "publication": style("publication", font=layout.font, size=layout.body_size,
                              color=text_color, leftIndent=layout.bullet_indent,
                              firstLineIndent=-layout.bullet_indent, spaceAfter=3),
@@ -225,13 +225,14 @@ def build_flowables(resume: Resume, layout: Layout | None = None) -> list[Any]:
         out = [p(_rich(basics.name), "name")]
         if basics.headline:
             out.append(p(_rich(basics.headline), "headline"))
-        # Contact details in email, phone, location order; links each on their
-        # own line below, so a long URL cannot crowd the line you read first.
+        # Contact details in email, phone, location order; links on their own
+        # line beneath it, joined so they read as one line rather than a stack.
         contact = _sep([basics.email, basics.phone, basics.location])
         if contact:
             out.append(p(_rich(contact), "contact"))
-        for link in basics.links:
-            out.append(p(_rich(f"{link.label}: {link.url}"), "contact"))
+        links = " \u00b7 ".join(f"{link.label}: {link.url}" for link in basics.links)
+        if links:
+            out.append(p(_rich(links), "contact"))
         return out
 
     def summary():
