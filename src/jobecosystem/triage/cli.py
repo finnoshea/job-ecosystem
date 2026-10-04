@@ -49,6 +49,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="rows to load per view (default: 300)",
     )
     parser.add_argument(
+        "--resume",
+        metavar="PATH",
+        default=None,
+        help="resume JSON to match jobs against with ctrl+r; defaults to"
+        " $TAILOR_RESUME_FILE, then resume.base.json at the repo root",
+    )
+    parser.add_argument(
         "--list-sources",
         action="store_true",
         help="print the stored sources and job counts, then exit",
@@ -97,7 +104,9 @@ def run(args: argparse.Namespace, *, out=sys.stdout, err=sys.stderr) -> int:
             )
             return EXIT_SETUP_FAILED
 
-        return run_tui(db_path, page_size=args.page_size)
+        return run_tui(
+            db_path, page_size=args.page_size, resume_path=args.resume
+        )
     finally:
         conn.close()
 

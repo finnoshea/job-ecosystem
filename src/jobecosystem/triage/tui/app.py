@@ -26,6 +26,7 @@ Keys
     d        fetch the selected job's description (if missing)
     c        copy the selected job's URL to the local clipboard
     ctrl+e   find jobs similar to the selected one
+    ctrl+r   match the stored jobs against the resume file
     r        reload the current tab
     q        quit
 
@@ -43,7 +44,9 @@ the machine you are sitting at, over SSH included.
 Embedding search is a separate action, not a live filter: typing in the Search
 box matches keywords, while ``ctrl+e`` on a job finds others like it. The query
 vector is embedded once per submit and cached for the session, per the earlier
-decision that live search is not wanted.
+decision that live search is not wanted. ``ctrl+r`` is the resume-side
+counterpart: it embeds the resume named by ``--resume`` (or the resolved
+default) and ranks the whole database against it, not just one job.
 """
 
 from __future__ import annotations
@@ -194,18 +197,22 @@ class JobsTable(DataTable):
     def on_mount(self) -> None:
         self.cursor_type = "row"
         self.zebra_stripes = True
+        # Score sits before Company/Title/Location on purpose: those three can be
+        # long, and with Score last it was the column pushed past the right edge,
+        # so reading it meant scrolling the table sideways. Ranking is the whole
+        # point of the Similar tab, so it stays in the always-visible block.
         keys = self.add_columns(
             "ID",
             "Rating",
             "Status",
+            "Score",
             "Company",
             "Title",
             "Location",
-            "Score",
         )
         # Fixed rather than auto: the cap is the point, and a fixed column keeps
         # the freed width available to the columns that were also being clipped.
-        self.columns[keys[4]].width = TITLE_WIDTH
+        self.columns[keys[5]].width = TITLE_WIDTH
 
 
 class JobDetail(VerticalScroll):
@@ -341,6 +348,7 @@ class JobApp(App[None]):
         Binding("d", "fetch_description", "Describe"),
         Binding("c", "copy_url", "Copy URL"),
         Binding("ctrl+e", "similar_to_selected", "More like this"),
+        Binding("ctrl+r", "resume_match", "Resume match"),
         Binding("right_square_bracket", "next_tab", "Next tab", key_display="]"),
         Binding("left_square_bracket", "prev_tab", "Prev tab", key_display="["),
         Binding("greater_than_sign", "next_page", "Next page", key_display=">"),
@@ -359,11 +367,15 @@ class JobApp(App[None]):
         *,
         page_size: int = DEFAULT_PAGE_SIZE,
         embed_query: Callable[[str], Sequence[float]] | None = None,
+        resume_path: str | None = None,
     ) -> None:
         super().__init__()
         self.conn = conn
         self.page_size = page_size
         self._embed_query = embed_query
+        #: Resume file for ctrl+r. Resolved lazily, so a bad path is reported
+        #: when the key is pressed rather than stopping the interface at startup.
+        self.resume_path = resume_path
         self.rows: list[Row] = []
         self._query_cache: dict[str, list[float]] = {}
         #: Ids the Stale view selects, and repost evidence per id. Populated on
@@ -541,15 +553,29 @@ class JobApp(App[None]):
     def similar_rows(self) -> list[Row]:
         """The whole Similar-tab result set, before paging.
 
-        "More like this job" re-queries from the stored vector; a text search
-        re-renders the results it already computed.
+        "More like this job" re-queries from the stored vector; a text search or
+        resume match re-uses the ranking it already computed. The ranking is
+        kept, but the jobs themselves are re-read from the store: a Row holds a
+        snapshot taken when the search ran, so without this a status or rating
+        change made here would never show on this tab.
         """
         if self._similar_to is not None:
             return [
                 Row(found.job, found.score)
                 for found in q.similar_to_job(self.conn, self._similar_to)
             ]
-        return list(self._similar_rows)
+        if not self._similar_rows:
+            return []
+        live = {
+            job.id: job
+            for job in q.get_jobs(
+                self.conn, [row.job.id for row in self._similar_rows]
+            )
+        }
+        return [
+            Row(live.get(row.job.id, row.job), row.score)
+            for row in self._similar_rows
+        ]
 
     def count_rows(self, tab: str) -> int:
         """Total rows the tab holds, for the page indicator.
@@ -604,10 +630,10 @@ class JobApp(App[None]):
             str(job.id),
             "—" if job.rating is None else str(job.rating),
             job.status,
+            "" if row.score is None else f"{row.score:.3f}",
             job.company,
             truncate(job.title, TITLE_WIDTH),
             job.location or "",
-            "" if row.score is None else f"{row.score:.3f}",
         )
 
     def update_header(self) -> None:
@@ -920,6 +946,53 @@ class JobApp(App[None]):
         self.query_one(TabbedContent).active = "similar"
         self.refresh_view()
 
+    def action_resume_match(self) -> None:
+        """Rank every stored job against the resume file.
+
+        The resume is embedded as a query, the same way a text search is, so its
+        scores are comparable to the other Similar-tab results. A missing or
+        malformed resume is reported and then ignored -- the interface stays up,
+        since a bad path is not worth losing the session over.
+        """
+        if self._embed_query is None:
+            self.notify("No embedder configured", severity="error")
+            return
+
+        # Imported here rather than at module scope: triage should not pull in
+        # the tailor stack unless this action is actually used. Only the resume
+        # module is touched, never render, so reportlab is not loaded.
+        from ...tailor import resume as tailor_resume
+
+        try:
+            base = tailor_resume.load(self.resume_path)
+        except Exception as error:  # noqa: BLE001 - surfaced to the user
+            self.notify(f"Resume: {error}", severity="error")
+            return
+
+        path = tailor_resume.resolve_resume_path(self.resume_path)
+        vector = self.embed_cached(tailor_resume.query_text(base))
+        if vector is None:
+            return
+
+        found = q.similar_jobs(
+            self.conn, vector, scope="all", limit=self.page_size
+        )
+        # Cache before switching tabs: TabActivated fires a refresh that would
+        # otherwise read an empty Similar tab and discard these rows.
+        self._similar_to = None
+        self._similar_rows = [Row(hit.job, hit.score) for hit in found]
+        self._similar_for = f"resume: {path.name}"
+        # The Similar tab's total has changed, and it is cached per tab.
+        self._count_cache = None
+        self._active_tab = "similar"
+        self.query_one(TabbedContent).active = "similar"
+        self.refresh_view()
+        if not self.rows:
+            self.notify(
+                "No embedded jobs to match against; run the embedder first",
+                severity="warning",
+            )
+
     def embed_cached(self, text: str) -> list[float] | None:
         """Embed a query, memoised for the session.
 
@@ -961,6 +1034,7 @@ def run(
     *,
     page_size: int = DEFAULT_PAGE_SIZE,
     embed_query: Callable[[str], Sequence[float]] | None = None,
+    resume_path: str | None = None,
 ) -> int:
     """Open the database and run the TUI. Returns a process exit code."""
     conn = core_db.connect(db_path)
@@ -969,6 +1043,7 @@ def run(
             conn,
             page_size=page_size,
             embed_query=embed_query if embed_query is not None else build_embedder(),
+            resume_path=resume_path,
         )
         app.run()
     finally:
