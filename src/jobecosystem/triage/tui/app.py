@@ -92,6 +92,15 @@ DEFAULT_PAGE_SIZE = 300
 #: 180 characters), so truncation is expected; the detail pane shows it in full.
 TITLE_WIDTH = 60
 
+#: Characters of a company name shown in the list before it is cut off.
+#:
+#: Company names are usually short, but the ones that are not ("Nvidia
+#: Corporation International", or a legal entity with its parenthetical) push
+#: the wide Title/Location columns past the pane and force the whole row to
+#: scroll sideways. Twenty columns keeps the usual name intact and bounds the
+#: outliers; the detail pane shows the full name.
+COMPANY_WIDTH = 20
+
 #: Shown in place of the removed characters.
 ELLIPSIS = "\u2026"
 
@@ -631,7 +640,7 @@ class JobApp(App[None]):
             "—" if job.rating is None else str(job.rating),
             job.status,
             "" if row.score is None else f"{row.score:.3f}",
-            job.company,
+            truncate(job.company, COMPANY_WIDTH),
             truncate(job.title, TITLE_WIDTH),
             job.location or "",
         )
