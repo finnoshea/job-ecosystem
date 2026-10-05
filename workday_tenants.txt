@@ -81,7 +81,7 @@ sonyglobal.wd1  	sonyglobal  	SonyGlobalCareers		Sony
 warnerbros.wd5  	warnerbros  	global				WarnerBros
 walmart.wd504  		walmart  	WalmartExternal			Walmart
 goodrx.wd1  		goodrx  	Careers				GoodRx
-
+snapchat.wd1  		snapchat  	sourced				SnapChat
 
 # ASMLEXT1 is ASML's largest site (641 openings vs 191 on ASMLPrivate1), but
 # robots.txt asks crawlers not to touch it:
