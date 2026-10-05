@@ -40,8 +40,6 @@ from __future__ import annotations
 
 import html
 import json
-import os
-import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +48,7 @@ from typing import Any
 
 from ...core.models import Job
 from ..base import FetchError, ParseError, Scraper
+from . import companies
 from .description import DescriptionError, html_to_text
 
 #: Greenhouse's public posting list, per board.
@@ -241,12 +240,20 @@ def parse_description(payload: Any) -> str:
 def resolve_companies_file(path: str | Path | None = None) -> Path:
     """Resolve the companies file: argument > ``GREENHOUSE_BOARDS_FILE`` >
     ``greenhouse_companies.txt`` at the repo root."""
-    if path is not None:
-        return Path(path).expanduser()
-    configured = os.environ.get("GREENHOUSE_BOARDS_FILE")
-    if configured:
-        return Path(configured).expanduser()
-    return DEFAULT_COMPANIES_FILE
+    return companies.resolve_file(
+        path, env_var="GREENHOUSE_BOARDS_FILE", default=DEFAULT_COMPANIES_FILE
+    )
+
+
+def _specific(outcome: companies.ParseOutcome) -> ParseOutcome:
+    """Map the shared tokenized entries onto Greenhouse board specs."""
+    return ParseOutcome(
+        specs=[
+            BoardSpec(board=entry.slug, name=entry.name)
+            for entry in outcome.entries
+        ],
+        errors=outcome.errors,
+    )
 
 
 def parse_boards(text: str) -> ParseOutcome:
@@ -256,32 +263,11 @@ def parse_boards(text: str) -> ParseOutcome:
     duplicate boards are skipped rather than raising -- one typo must not stop
     the daily scrape. Duplicates keep the first occurrence so an earlier line
     with a display name is not overwritten by a later bare duplicate.
+
+    The tokenizing itself is shared with the other per-board sources; see
+    :mod:`jobecosystem.ingest.sources.companies`.
     """
-    specs: list[BoardSpec] = []
-    errors: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    for number, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-
-        try:
-            parts = shlex.split(line)
-        except ValueError as error:  # unbalanced quotes
-            errors.append((number, f"could not parse: {error}"))
-            continue
-
-        if not parts:
-            continue
-
-        board = parts[0]
-        if board in seen:
-            continue
-        seen.add(board)
-        specs.append(BoardSpec(board=board, name=" ".join(parts[1:]) or None))
-
-    return ParseOutcome(specs=specs, errors=errors)
+    return _specific(companies.parse_lines(text))
 
 
 def load_companies(path: str | Path | None = None) -> ParseOutcome:
@@ -291,10 +277,9 @@ def load_companies(path: str | Path | None = None) -> ParseOutcome:
     missing optional config file means "no boards configured", which the caller
     reports clearly.
     """
-    companies_file = resolve_companies_file(path)
-    if not companies_file.exists():
-        return ParseOutcome(specs=[], errors=[])
-    return parse_boards(companies_file.read_text(encoding="utf-8"))
+    return _specific(companies.load_lines(
+        path, env_var="GREENHOUSE_BOARDS_FILE", default=DEFAULT_COMPANIES_FILE
+    ))
 
 
 def build_scrapers(

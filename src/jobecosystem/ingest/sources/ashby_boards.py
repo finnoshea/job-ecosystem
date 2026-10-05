@@ -24,11 +24,11 @@ Location is resolved like the database path: an explicit argument, then
 from __future__ import annotations
 
 import os
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..base import Scraper
+from . import companies
 from .ashby import AshbyScraper
 
 #: src/jobecosystem/ingest/sources/ashby_boards.py
@@ -68,29 +68,12 @@ def parse_boards(text: str, *, origin: str = "<string>") -> list[BoardSpec]:
     Lines with extra tokens beyond ``slug [Display Name]`` are still accepted:
     the remainder becomes the display name, so no quoting is required.
     """
-    specs: list[BoardSpec] = []
-    seen: set[str] = set()
-
-    for number, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-
-        parts = shlex.split(line)
-        if not parts:
-            continue
-
-        slug = parts[0]
-        if slug in seen:
-            # First occurrence wins, so a display name is not overwritten by a
-            # later bare duplicate.
-            continue
-        seen.add(slug)
-
-        company = " ".join(parts[1:]) or None
-        specs.append(BoardSpec(slug=slug, company=company))
-
-    return specs
+    # Tokenizing, comment stripping and duplicate handling are shared with the
+    # other per-board sources; only the spec shape is Ashby-specific.
+    return [
+        BoardSpec(slug=entry.slug, company=entry.name)
+        for entry in companies.parse_lines(text).entries
+    ]
 
 
 def load_boards(

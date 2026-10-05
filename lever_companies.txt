@@ -1,0 +1,74 @@
+# Lever companies to scrape, one board per line.
+#
+# Lever's public posting API is per company, identified by a single slug (the
+# segment in https://jobs.lever.co/<slug>):
+#
+#   https://api.lever.co/v0/postings/<slug>?mode=json
+#
+# Each line:
+#
+#   slug  [Display Name]
+#
+# A display name is optional; the slug is used as the company name without one.
+#
+# WHERE THE SLUGS COME FROM
+#
+# This file is grown by `jobecosystem-discover`, which reads the current
+# "Ask HN: Who is hiring?" thread and a few job APIs and appends every
+# jobs.lever.co/<slug> URL it finds. Run it, review the diff, and delete
+# anything wrong before the next scrape.
+#
+# VERIFY A BOARD BEFORE RELYING ON IT
+#
+# The API needs no key and reports the postings directly:
+#
+#   curl -s "https://api.lever.co/v0/postings/leverdemo?mode=json" | head -c 200
+#
+# A wrong slug returns HTTP 404.
+aptible  Aptible
+atlassian  Atlassian
+bandwidth  Palmetto
+blueowl  BlueOwl LLC
+byte-2  byte
+captionhealth  Caption Health
+caremessage  CareMessage
+change  Change.org
+cortico  Cortico
+density
+fleetsmith  Fleetsmith
+flow  Flow Commerce
+framework  Framework
+frontapp  Frontapp
+getpoint  Point
+givecampus  GiveCampus
+headway  Headway
+highrise  Highrise
+invenia  Invenia
+issuu  Issuu
+jobscan-2  Jobscan.co
+joyn  joyn.de
+kong  Kong Inc
+neednova  Nova Credit
+neuralink  Neuralink
+outschool  Outschool
+peregrine  peregrine.io
+protocol  Protocol Labs
+reifyhealth  Reify Health
+rescale  Rescale
+revolut  Revolut
+ribbonhealth  Ribbon Health
+scribd  Scribd
+semanticbits  SemanticBits
+sensortower  Sensor Tower
+sentilink  SentiLink ( https://sentilink.com )
+siteline  Siteline
+skool  Skool
+skydio  Skydio
+tesorio
+thoughtexchange  Thoughtexchange
+tophat  Top Hat
+trueaccord
+wealthfront  Wealthfront
+x-claim  XCLAIM
+yieldstreet  Yieldstreet
+zipari  Zipari

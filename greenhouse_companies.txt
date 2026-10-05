@@ -53,3 +53,21 @@ motional  Motional
 # Square is now Block; the Greenhouse board kept the newer name. Its careers
 # site is block.xyz/careers. Verified at 223 openings.
 block     Block
+adhocteam  Ad Hoc
+aminohealth  Amino
+chronosphere  Chronosphere
+cleoai
+consensys  MetaMask
+current81
+dots  Dots
+intercom  Intercom
+janetechnologies  Jane
+larkhealth  Lark Health
+magicleapinc  Magic Leap
+nylas  Nylas
+paige  Paige
+thumbtack  Thumbtack.com
+trayio  Tray.io
+updater  Updater
+warbyparker  Warby Parker
+wistia  Wistia

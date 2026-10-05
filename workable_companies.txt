@@ -1,0 +1,33 @@
+# Workable companies to scrape, one account per line.
+#
+# Workable's public posting API is per account, identified by a subdomain:
+#
+#   https://apply.workable.com/api/v1/widget/accounts/<subdomain>?details=true
+#
+# The same account appears in two host shapes, both understood by discovery:
+#
+#   https://apply.workable.com/<account>
+#   https://<account>.workable.com/
+#
+# Each line:
+#
+#   slug  [Display Name]
+#
+# A display name is optional; the slug is used as the company name without one.
+#
+# WHERE THE SLUGS COME FROM
+#
+# This file is grown by `jobecosystem-discover`, which reads the current
+# "Ask HN: Who is hiring?" thread and a few job APIs and appends every
+# apply.workable.com/<account> link it finds. Run it, review the diff, and
+# delete anything wrong before the next scrape.
+#
+# VERIFY AN ACCOUNT BEFORE RELYING ON IT
+#
+# The API needs no key and answers with the account's jobs:
+#
+#   curl -s "https://apply.workable.com/api/v1/widget/accounts/workable?details=true" | head -c 200
+#
+# A wrong account returns HTTP 404.
+memrise  Memrise
+new-vector  New Vector (Matrix.org & Riot.im)

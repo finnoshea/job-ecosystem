@@ -39,8 +39,6 @@ against a saved payload with no network access.
 from __future__ import annotations
 
 import json
-import os
-import shlex
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -50,6 +48,7 @@ from urllib.parse import urlencode
 
 from ...core.models import Job
 from ..base import FetchError, ParseError, Scraper
+from . import companies
 from .description import DescriptionError, html_to_text
 
 #: SmartRecruiters' public posting list, per company.
@@ -345,12 +344,32 @@ def parse_description(payload: Any) -> str:
 def resolve_companies_file(path: str | Path | None = None) -> Path:
     """Resolve the companies file: argument > ``SMARTRECRUITERS_COMPANIES_FILE``
     > ``smartrecruiters_companies.txt`` at the repo root."""
-    if path is not None:
-        return Path(path).expanduser()
-    configured = os.environ.get("SMARTRECRUITERS_COMPANIES_FILE")
-    if configured:
-        return Path(configured).expanduser()
-    return DEFAULT_COMPANIES_FILE
+    return companies.resolve_file(
+        path,
+        env_var="SMARTRECRUITERS_COMPANIES_FILE",
+        default=DEFAULT_COMPANIES_FILE,
+    )
+
+
+def _specific(outcome: companies.ParseOutcome) -> ParseOutcome:
+    """Map shared entries onto SmartRecruiters specs.
+
+    The first extra token is a country only when it looks like one (``*`` or a
+    two-letter code); otherwise it is the start of the display name.
+    """
+    specs: list[CompanySpec] = []
+    for entry in outcome.entries:
+        country: str | None = None
+        rest = entry.fields
+        if rest and _looks_like_country(rest[0]):
+            country = _normalize_country(rest[0])
+            rest = rest[1:]
+        specs.append(CompanySpec(
+            identifier=entry.slug,
+            country=country,
+            name=" ".join(rest) or None,
+        ))
+    return ParseOutcome(specs=specs, errors=outcome.errors)
 
 
 def parse_companies(text: str) -> ParseOutcome:
@@ -364,39 +383,11 @@ def parse_companies(text: str) -> ParseOutcome:
     Comments (``#``), blank lines, and duplicate identifiers are skipped rather
     than raising -- one typo must not stop the daily scrape. Duplicates keep the
     first occurrence, since the identifier already determines the source.
+
+    The tokenizing itself is shared with the other per-board sources; see
+    :mod:`jobecosystem.ingest.sources.companies`.
     """
-    specs: list[CompanySpec] = []
-    errors: list[tuple[int, str]] = []
-    seen: set[str] = set()
-
-    for number, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-
-        try:
-            parts = shlex.split(line)
-        except ValueError as error:  # unbalanced quotes
-            errors.append((number, f"could not parse: {error}"))
-            continue
-
-        if not parts:
-            continue
-
-        identifier = parts[0]
-        country: str | None = None
-        rest = parts[1:]
-        if rest and _looks_like_country(rest[0]):
-            country = _normalize_country(rest[0])
-            rest = rest[1:]
-        name = " ".join(rest) or None
-
-        if identifier in seen:
-            continue
-        seen.add(identifier)
-        specs.append(CompanySpec(identifier=identifier, country=country, name=name))
-
-    return ParseOutcome(specs=specs, errors=errors)
+    return _specific(companies.parse_lines(text))
 
 
 def load_companies(path: str | Path | None = None) -> ParseOutcome:
@@ -406,10 +397,11 @@ def load_companies(path: str | Path | None = None) -> ParseOutcome:
     missing optional config file means "no companies configured", which the
     caller reports clearly.
     """
-    companies_file = resolve_companies_file(path)
-    if not companies_file.exists():
-        return ParseOutcome(specs=[], errors=[])
-    return parse_companies(companies_file.read_text(encoding="utf-8"))
+    return _specific(companies.load_lines(
+        path,
+        env_var="SMARTRECRUITERS_COMPANIES_FILE",
+        default=DEFAULT_COMPANIES_FILE,
+    ))
 
 
 def build_scrapers(

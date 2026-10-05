@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jobecosystem"
+version = "0.1.0"
+description = "Personal job-hunting ecosystem: ATS scrapers, SQLite store, triage TUI, resume adapter"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE.md" }
+
+# Runtime dependencies are deliberately narrow. Embedding libraries are an
+# optional extra so the scrape/query/TUI paths do not require torch.
+dependencies = [
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+embed = [
+    "voyageai>=0.5",
+]
+pdf = [
+    # Pure-Python PDF rendering; no system libraries required.
+    "reportlab>=4",
+]
+tui = [
+    # 8.2.8 is the oldest version this code is known to work with; it uses APIs
+    # that changed within the 8.x line (remove_children returning an awaitable,
+    # App.on_key, Binding key names). The upper bound guards against the next
+    # major, which nothing here has been tested against.
+    "textual>=8.2.8,<9",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+# Console scripts, not a single `python -m jobecosystem`. Scraping, description
+# fetching, embedding, triage, and the resume tailor have nothing in common
+# operationally: the timer jobs report failure through an exit code, the others
+# need a terminal and a human. Each entry point lives next to what it drives, so
+# the scraper neither imports the TUI nor pulls in the description, embedding, or
+# tailoring code. See tests/test_console_scripts.py, which verifies these resolve.
+[project.scripts]
+jobecosystem-scrape = "jobecosystem.ingest.cli:main"
+jobecosystem-describe = "jobecosystem.ingest.describe_cli:main"
+jobecosystem-embed = "jobecosystem.ingest.embed_cli:main"
+jobecosystem-discover = "jobecosystem.ingest.discover_cli:main"
+jobecosystem-tailor = "jobecosystem.tailor.cli:main"
+jobecosystem-triage = "jobecosystem.triage.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# JSON Schemas ship with the package, not the repo.
+[tool.setuptools.package-data]
+"jobecosystem.tailor" = ["schema/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "slow: requires the embedding model in the local Hugging Face cache",
+    "network: hits a live third-party API; skipped unless explicitly selected",
+]
+filterwarnings = [
+    "error::FutureWarning",
+]

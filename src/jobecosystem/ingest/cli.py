@@ -31,8 +31,11 @@ from . import runner
 from .base import Scraper
 from .sources.ashby_boards import build_scrapers as build_ashby_scrapers
 from .sources.greenhouse import build_scrapers as build_greenhouse_scrapers
+from .sources.lever import build_scrapers as build_lever_scrapers
 from .sources.smartrecruiters import build_scrapers as build_smartrecruiters_scrapers
 from .sources.workday_tenants import build_scrapers as build_workday_scrapers
+from .sources.workable import DEFAULT_PAGES as WORKABLE_DEFAULT_PAGES
+from .sources.workable import build_scrapers as build_workable_scrapers
 
 PROGRAM = "jobecosystem-scrape"
 
@@ -110,6 +113,43 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--lever-companies",
+        metavar="PATH",
+        default=None,
+        help=(
+            "site list file; defaults to $LEVER_COMPANIES_FILE,"
+            " then lever_companies.txt"
+        ),
+    )
+    parser.add_argument(
+        "--workable-pages",
+        metavar="N",
+        type=int,
+        default=WORKABLE_DEFAULT_PAGES,
+        help=(
+            "pages of the Workable marketplace feed to read per run"
+            " (default: %(default)s, 20 jobs each)"
+        ),
+    )
+    parser.add_argument(
+        "--workable-query",
+        metavar="TEXT",
+        default=None,
+        help="server-side keyword filter for the Workable feed",
+    )
+    parser.add_argument(
+        "--workable-location",
+        metavar="TEXT",
+        default=None,
+        help="server-side location filter for the Workable feed",
+    )
+    parser.add_argument(
+        "--workable-workplace",
+        metavar="TEXT",
+        default=None,
+        help="server-side workplace filter for the Workable feed (e.g. remote)",
+    )
+    parser.add_argument(
         "--quiet",
         action="store_true",
         help="print nothing on success; errors still go to stderr",
@@ -138,11 +178,13 @@ def select_scrapers(args: argparse.Namespace) -> Selection:
     include_workday = not family or "workday" in family
     include_smartrecruiters = not family or "smartrecruiters" in family
     include_greenhouse = not family or "greenhouse" in family
+    include_lever = not family or "lever" in family
+    include_workable = not family or "workable" in family
 
     # Order is the fetch order, and it is deliberate: the single-request boards
     # first, Workday last. Workday is both the largest and the most likely to be
     # slow or flaky, so it does not hold up the sources whose results arrive
-    # sooner.
+    # sooner. Workable sits just before it: one source, but a paged feed.
     if include_ashby:
         selection.scrapers.extend(build_ashby_scrapers(args.ashby_boards))
     if include_smartrecruiters:
@@ -153,6 +195,15 @@ def select_scrapers(args: argparse.Namespace) -> Selection:
         selection.scrapers.extend(
             build_greenhouse_scrapers(args.greenhouse_companies)
         )
+    if include_lever:
+        selection.scrapers.extend(build_lever_scrapers(args.lever_companies))
+    if include_workable:
+        selection.scrapers.extend(build_workable_scrapers(
+            pages=args.workable_pages,
+            query=args.workable_query,
+            location=args.workable_location,
+            workplace=args.workable_workplace,
+        ))
     if include_workday:
         selection.scrapers.extend(build_workday_scrapers(args.workday_tenants))
 
@@ -226,8 +277,8 @@ def run(
         if not len(selection):
             print(
                 f"{PROGRAM}: no sources configured; check ashby_boards.txt,"
-                " smartrecruiters_companies.txt, greenhouse_companies.txt, and"
-                " workday_tenants.txt",
+                " smartrecruiters_companies.txt, greenhouse_companies.txt,"
+                " lever_companies.txt, and workday_tenants.txt",
                 file=err,
             )
             return EXIT_SETUP_FAILED
