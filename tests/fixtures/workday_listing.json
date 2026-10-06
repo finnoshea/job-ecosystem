@@ -1,0 +1,45 @@
+{
+  "total": 191,
+  "jobPostings": [
+    {
+      "title": "Software test engineer - motion control",
+      "externalPath": "/job/Veldhoven-Netherlands/Software-test-engineer---motion-control_J-00351580-2",
+      "timeType": "Full time",
+      "locationsText": "Veldhoven, Netherlands",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "J-00351580"
+      ]
+    },
+    {
+      "title": "Principal IT Applications Engineer",
+      "externalPath": "/job/Veldhoven-Netherlands/Principal-IT-Applications-Engineer_J-00354191",
+      "timeType": "Part time",
+      "locationsText": "Veldhoven, Netherlands",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "J-00354191"
+      ]
+    },
+    {
+      "title": "ASMLBG Position",
+      "externalPath": "/job/Berlin-Germany/ASMLBG-Position_J-00350151",
+      "timeType": "Full time",
+      "locationsText": "Berlin, Germany",
+      "postedOn": "Posted Today",
+      "bulletFields": [
+        "J-00350151"
+      ]
+    },
+    {
+      "title": "Management Assistant",
+      "externalPath": "/job/Veldhoven-Netherlands/Management-Assistant_J-00354112",
+      "timeType": "Full time",
+      "locationsText": "Veldhoven, Netherlands",
+      "postedOn": "Posted Yesterday",
+      "bulletFields": [
+        "J-00354112"
+      ]
+    }
+  ]
+}
