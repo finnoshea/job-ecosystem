@@ -1,0 +1,386 @@
+How to schedule the jobs
+========================
+
+Three commands run on a schedule: `jobecosystem-scrape` collects listings,
+`jobecosystem-describe` fetches the descriptions those listings lack (section 6),
+and `jobecosystem-embed` turns the descriptions into vectors for similarity
+search (section 7). Each is a command, not a service: it does one pass, writes to
+the database, and exits. Something has to run them on a schedule, and on a
+personal machine that means cron.
+
+This document covers the install-once steps, the crontab lines, and how to tell
+whether they worked. Nothing here needs root, and nothing outside this file needs
+changing.
+
+Replace these placeholders throughout:
+
+    VENV      the virtualenv the package is installed into
+              e.g. /home/you/workspace/.venv
+    CODE      where this repository lives
+              e.g. /home/you/workspace/jobecosystem
+    DB        the database file
+              e.g. /home/you/jobs/jobs.db
+
+
+1. Install the package into the virtualenv
+------------------------------------------
+
+Console scripts come from an editable install, so do this once (and again only if
+the entry points change):
+
+    VENV/bin/pip install -e CODE
+
+Check each command resolves. Use the absolute path -- see step 4 for why:
+
+    VENV/bin/jobecosystem-scrape --help
+    VENV/bin/jobecosystem-describe --help
+    VENV/bin/jobecosystem-embed --help
+
+If those print usage, cron can run them. If one says "command not found", the
+install did not happen or you are looking at the wrong virtualenv.
+
+
+2. Decide where the database goes
+---------------------------------
+
+These are resolved independently, each falling back to a location beside the
+code:
+
+    DB_PATH                          the database file
+    ASHBY_BOARDS_FILE                the Ashby board list
+    SMARTRECRUITERS_COMPANIES_FILE   the SmartRecruiters company list
+    GREENHOUSE_BOARDS_FILE           the Greenhouse company list
+    LEVER_COMPANIES_FILE             the Lever site list
+    WORKDAY_TENANTS_FILE             the Workday site list
+    VOYAGE_API_KEY                   Voyage AI key (embeddings only)
+
+Workable is the exception: it reads Workable's cross-company job marketplace
+feed, not a per-company board, so it has no config file at all and always runs.
+Its only knob is --workable-pages (section 4).
+
+Leaving the file paths unset is coherent: the database and every config file sit
+in CODE. Setting only DB_PATH is also common, to keep data off the code volume.
+VOYAGE_API_KEY is different -- it is a secret, needed only by
+jobecosystem-embed and the TUI's similarity search (section 7).
+
+Cron does not read your shell profile or any .env file, so anything you want set
+must be on the crontab line itself.
+
+Wherever DB goes, its parent directory must exist and be writable by your user.
+The scraper creates the file but not the directory.
+
+
+3. Run it once by hand
+----------------------
+
+Before scheduling anything, confirm a run works and see how long it takes. This
+also creates and migrates the database:
+
+    DB_PATH=DB VENV/bin/jobecosystem-scrape
+
+Expect one line per source and a totals line, then exit 0. A nonzero exit means a
+source failed; the output names which one. Re-running immediately should insert
+nothing new, which confirms deduplication is working.
+
+Timing matters for step 5. A full pass is dominated by the network: Ashby,
+SmartRecruiters and Greenhouse are one request per board, Lever is one per site,
+Workable is a paged feed (25 pages of 20 by default), and Workday is slowest.
+Expect several minutes. Most Lever sites will report "board not found" -- see
+the troubleshooting note on that.
+
+
+4. Write the crontab
+--------------------
+
+    crontab -e
+
+Add one line. This example runs daily at 06:17:
+
+    17 6 * * * DB_PATH=DB VENV/bin/jobecosystem-scrape --quiet >> /tmp/jobs-scrape.log 2>&1
+
+Points about that line:
+
+  * Use the ABSOLUTE path to the script. Cron's PATH is minimal and your
+    virtualenv is almost certainly not on it. This is the single most common
+    cause of "it works when I run it but not from cron".
+
+  * The five fields are minute, hour, day-of-month, month, day-of-week. `17 6 * *
+    *` is 06:17 every day. Pick an odd minute: everybody schedules at :00, and
+    there is no reason to join them.
+
+  * `--quiet` suppresses stdout on success, so the log only accumulates things
+    worth reading. Errors still go to stderr and are still printed.
+
+  * `>> LOG 2>&1` appends both streams to a file. Without it, output goes to
+    local mail, if any is configured -- and is otherwise discarded.
+
+  * To run it as a single command rather than every day, leave the line out and
+    keep step 3 as your manual procedure.
+
+The Workable feed is the one source with a per-run size knob: --workable-pages is
+how many pages of 20 jobs to read (default 25). Lower it to spend less time
+there, or raise it to reach further back through the marketplace:
+
+    17 6 * * * DB_PATH=DB VENV/bin/jobecosystem-scrape --workable-pages 10 --quiet >> /tmp/jobs-scrape.log 2>&1
+
+Descriptions are a second, separate job with its own schedule -- see section 6.
+Do not put it on the scrape line.
+
+Cron has no concept of "activate the virtualenv first". Setting an environment
+prefix on the command line, as above, is the portable way to pass DB_PATH.
+
+Check the crontab was accepted:
+
+    crontab -l
+
+
+5. Verify it actually ran
+-------------------------
+
+Wait for the first scheduled time, then check the database rather than the log.
+The log only shows what this run printed; the database is the durable record.
+
+    sqlite3 DB "SELECT source, status, duration_seconds, fetched, inserted, errors
+                FROM run_stats ORDER BY started_at DESC LIMIT 10;"
+
+`status` is 'finished' or 'running'. A row stuck on 'running' with a large
+minutes_since_start is a crash, not a slow run -- cron will not retry it, and the
+next scheduled run will start fresh regardless.
+
+To see which sources are consistently broken rather than transiently unlucky:
+
+    sqlite3 DB "SELECT * FROM run_errors_by_source;"
+
+To see the failures themselves:
+
+    sqlite3 DB "SELECT source, started_at, error FROM scrape_errors
+                JOIN scrape_runs ON scrape_runs.id = scrape_errors.run_id
+                ORDER BY scrape_errors.id DESC LIMIT 20;"
+
+
+6. Getting descriptions
+-----------------------
+
+Why it is separate
+
+A scrape stores each job's *listing*. For most sources the listing carries no
+description -- the full text is one more request per job. At thousands of
+openings that is thousands of requests, so it is a separate, paced command
+rather than part of the scrape. Until it runs, those rows have a NULL
+description (and no content_hash). Ashby, Lever and Workable are the exceptions:
+their listings already include the text, so those rows arrive complete.
+
+Run it once by hand
+    DB_PATH=DB VENV/bin/jobecosystem-describe --limit 5
+
+Expect one line, then exit 0:
+    described 5 of 5 (5 written, 0 skipped, 0 failed)
+
+The small limit is deliberate for a first check. Re-running fetches the NEXT
+batch: a completed row leaves the queue by gaining a content_hash, so the
+command always makes progress and never repeats work it has done.
+
+Schedule it
+
+Give it its own crontab line, run more often than the scrape and bounded per
+run:
+
+    37 7 * * * DB_PATH=DB VENV/bin/jobecosystem-describe --limit 300 --quiet >> /tmp/jobs-describe.log 2>&1
+
+The exit code is the signal: 0 all good, 1 some descriptions failed (the
+stderr lines name the jobs), 2 could not start. `--quiet` keeps the log empty
+on a healthy day.
+
+Pick --limit so one run finishes comfortably inside the interval. At the
+default 0.75 s pause, 300 jobs is roughly four minutes of mostly waiting, so
+an hourly line is safe; a much larger --limit needs a longer gap, or a second
+line at another time.
+
+Tuning the pace
+`--delay` and `--jitter` set the pause between requests (defaults 0.75 and
+0.25 s). Raise them if a source starts rate-limiting: the work simply takes
+more runs to finish, and the queue makes it safe to stop at any point.
+
+Verify
+
+Progress is in the database, not the log:
+
+    sqlite3 DB "SELECT * FROM description_progress;"
+
+described_percent climbs over runs and pending is what is left. To see which
+sources are still waiting:
+
+    sqlite3 DB "SELECT source, COUNT(*) FROM jobs
+                WHERE content_hash IS NULL GROUP BY source ORDER BY 2 DESC;"
+
+A source whose count never falls is failing. Run that source by hand with a
+small --limit and read stderr: Workday rows need their site reachable, and
+SmartRecruiters/Greenhouse rows need those sources to have been scraped first.
+A row with no description_url cannot be filled, and the command reports that
+per job rather than silently skipping it.
+
+
+7. Embedding (similarity search)
+--------------------------------
+
+The triage UI's "more like this" (ctrl+e) and its Similar tab rank jobs by the
+cosine between stored vectors, so those vectors must be built from the
+descriptions. That calls Voyage AI, needs a `VOYAGE_API_KEY`, and is the only
+command with an outside service dependency; the client comes from the `embed`
+extra:
+
+    VENV/bin/pip install -e "CODE[embed]"
+
+Run it once by hand
+
+    DB_PATH=DB VOYAGE_API_KEY=... VENV/bin/jobecosystem-embed --limit 5
+
+Expect one line, then exit 0:
+
+    embedded 5 of 5 (5 written, 0 failed, 34210 tokens)
+
+Only rows that HAVE a description are eligible, so run describe first
+(section 6). Rows without one are skipped, and the ceiling is however many
+descriptions exist. The token count is reported so cost is visible.
+
+The model lives at Voyage, not on disk: nothing is downloaded or cached, and
+every run needs network and a valid key. A missing key exits 2 before doing any
+work.
+
+Schedule it
+
+It is the only one that costs money per use, so run it least often -- after the
+describe line, and with a modest --limit:
+
+    7 8 * * * VOYAGE_API_KEY=... DB_PATH=DB VENV/bin/jobecosystem-embed --limit 500 --quiet >> /tmp/jobs-embed.log 2>&1
+
+Exit 0 is all good, 1 means some embeddings failed (stderr names the jobs),
+2 could not start. A first run has to work through the whole backlog; later
+runs only cover jobs newly described, so they are small.
+
+Model changes
+
+--model defaults to voyage-4-lite. A job embedded with a DIFFERENT model is
+re-embedded, so changing --model repairs the table instead of mixing
+incomparable vectors. --force re-embeds even rows already on the current
+model, for when the embedding settings change but the model id does not.
+
+Switching from an older local model (nomic, 768-dim) leaves the old vectors in
+place until each row is overwritten. Because similarity requires a single width,
+finish the re-embed -- the per-model count below should show only the new model
+-- before relying on the Similar tab.
+
+API key, cost and rate limits
+
+Load the key into the environment; the command reads VOYAGE_API_KEY and nothing
+else. On the crontab line it goes in the same KEY=value prefix as DB_PATH (shown
+above).
+
+Embeddings are billed per token, and the summary line reports the tokens used.
+--limit bounds each run and --batch-size (default 128, the API's safe maximum)
+groups the requests, so a scheduled run is a predictable number of calls. If
+Voyage returns rate-limit errors, lower --limit or lengthen the interval. There
+is no offline mode: a failed run simply retries on the next schedule.
+
+Verify
+
+    sqlite3 DB "SELECT model, COUNT(*) FROM job_embeddings GROUP BY model;"
+
+    sqlite3 DB "SELECT COUNT(*) FROM jobs j
+                LEFT JOIN job_embeddings e ON e.job_id = j.id
+                WHERE j.description IS NOT NULL AND e.job_id IS NULL;"
+
+The first shows vectors per model (one row, normally); the second is the
+remaining backlog and should fall toward zero as runs proceed.
+
+Ordering matters: scrape -> describe -> embed. Embedding a job that has no
+vector yet is invisible to the Similar tab, and the tabs show nothing until the
+first embed run has written some rows.
+
+
+Troubleshooting
+---------------
+
+Nothing in the log at all
+    The job did not start. Almost always a path problem: verify the absolute path
+    to `jobecosystem-scrape`, and remember cron's working directory is your home
+    directory, not CODE. Relative paths in the crontab resolve against that.
+
+"command not found"
+    Cron's PATH does not include the virtualenv. Use the absolute path.
+
+Exit code 2, "no sources configured"
+    The board or tenant files were not found. Either they are not beside the code
+    (because DB_PATH was redirected but the config files were not), or the paths
+    you set are wrong. The message names the files it looked for. Workable needs
+    no file, so this now appears only when a --source filter leaves nothing to
+    run.
+
+Lever: many "board not found (404)" listing errors
+    lever_companies.txt is grown by jobecosystem-discover from job-board links,
+    which skew old, so most Lever sites are likely closed. A dead site is a
+    listing error, not a failed source: the run still exits 0 and the job still
+    lands if any board responded. Prune lever_companies.txt to quiet the noise;
+    re-running jobecosystem-discover only appends, it does not remove.
+
+Exit code 2, "could not open ..."
+    The database directory does not exist or is not writable by your user.
+
+Exit code 1, "N source(s) failed"
+    The run happened and some sources broke. This is the normal signal for "a
+    board changed shape" and is worth an alert; the per-source lines say which.
+
+Exit code 1, "N description(s) failed"
+    jobecosystem-describe: some detail requests failed. stderr names the jobs, and
+    the rest of the run still happened. One dead posting is normal; the same
+    source failing every run means its detail endpoint changed shape.
+
+describe is quiet and pending never falls
+    Either the queue is already empty (check description_progress), or the rows
+    have no description_url because that source was never scraped. Run
+    jobecosystem-scrape first, then describe.
+
+Exit code 2, "VOYAGE_API_KEY is not set"
+    jobecosystem-embed: the key is not in the process environment. Put it on the
+    crontab line; cron does not read your shell profile. The TUI needs it too for
+    similarity search.
+
+Exit code 1, "N embedding(s) failed"
+    The Voyage API rejected some requests -- an invalid key, a rate limit, or a
+    transient network error. stderr names the job and the message, and the rest
+    of the run still happened. The next scheduled run retries the failures.
+
+Similar tab is empty
+    No vectors have been written yet. Check the counts in section 7; run embed,
+    and remember only described rows can be embedded.
+
+Every run shows fetched=0 and no errors
+    Each board is reachable but empty. Either the board slugs are wrong, or the
+    companies genuinely have no openings. Check one by hand:
+
+        CODE/test_workday.sh HOST TENANT SITE
+
+Environment variables ignored
+    Some systems support a KEY=value prefix on a crontab line; a few do not.
+    If DB_PATH or VOYAGE_API_KEY seems ignored, either fall back to the default
+    location or wrap the command in a one-line shell script that exports the
+    variables and is itself the thing cron calls.
+
+
+Notes
+-----
+
+WAL mode means the database is up to three files -- jobs.db, jobs.db-wal and
+jobs.db-shm. If you back it up, copy all three, or run `sqlite3 DB "VACUUM;"` to
+collapse them into one first.
+
+Descriptions are fetched by jobecosystem-describe, a separate scheduled command;
+section 6 covers running, scheduling and verifying it. It writes into the rows
+jobecosystem-scrape left with a NULL content_hash, so the two commands run
+independently and a missed description run is picked up by the next one.
+
+The triage interface reads the same database and can be running while the scrape
+writes; WAL allows one writer alongside readers. It is launched separately, not
+from cron:
+
+    VENV/bin/jobecosystem-triage --db DB
